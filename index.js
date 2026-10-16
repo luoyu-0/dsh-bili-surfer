@@ -401,7 +401,7 @@ export function apply(ctx, config) {
       if (action === 'poll') {
         if (!loginSession) return { ok: false, error: '没有正在进行的扫码会话，先 action=start' }
         const r = await qrPoll(loginSession.cli, String(args.key || loginSession.key))
-        if (r.status === 'ok' && r.credentials) {
+        if (r.status === 'ok' && r.credentials?.sessdata) {
           saveCredential(stateDir, r.credentials)
           forgetMe()
           log(`登录成功：${r.credentials.dedeuserid || ''}`)
@@ -409,8 +409,9 @@ export function apply(ctx, config) {
           // ⚠️ 凭证绝不回传给对话（工具结果会进 transcript）——只回状态
           return { ok: true, status: 'ok', text: r.text, saved: true, loggedIn: true }
         }
-        if (r.status === 'expired') loginSession = null
-        return { ok: true, ...r }
+        if (r.status === 'expired' || r.status === 'unknown' || r.status === 'error') loginSession = null
+        // 逐字段挑，别 spread —— r 里带着 credentials（哪怕这次是 undefined）
+        return { ok: true, status: r.status, code: r.code, text: r.text, loggedIn: false }
       }
       return { ok: false, error: `不认识的 action：${action}` }
     },
@@ -525,14 +526,14 @@ export function apply(ctx, config) {
     if (POST && path === '/login/poll') {
       if (!loginSession) return sendJson(res, 200, { ok: false, error: '没有正在进行的扫码会话' })
       const r = await qrPoll(loginSession.cli, loginSession.key)
-      if (r.status === 'ok' && r.credentials) {
+      if (r.status === 'ok' && r.credentials?.sessdata) {
         saveCredential(stateDir, r.credentials)
         forgetMe()
         log('扫码登录成功')
         loginSession = null
         return sendJson(res, 200, { ok: true, status: r.status, text: r.text, loggedIn: true })
       }
-      if (r.status === 'expired' || r.status === 'unknown') loginSession = null
+      if (r.status === 'expired' || r.status === 'unknown' || r.status === 'error') loginSession = null
       return sendJson(res, 200, { ok: true, status: r.status, text: r.text, loggedIn: false })
     }
     if (POST && path === '/logout') {

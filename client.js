@@ -200,7 +200,7 @@ window.__ModuleLoader__.load({
                 clearInterval(t); qrPolling.current = false
                 setQr(null); setMsg('登录成功 ✅ 凭证只存在本机插件目录')
                 load()
-              } else if (!p.ok || p.status === 'expired' || p.status === 'unknown') {
+              } else if (!p.ok || p.status === 'expired' || p.status === 'unknown' || p.status === 'error') {
                 clearInterval(t); qrPolling.current = false
                 setMsg(p.text || '二维码过期了，重新点一次「生成二维码」')
               } else if (p.status === 'scanned') setMsg('扫到了，等你在手机上点确认')

@@ -44,6 +44,8 @@ selfcheck.host.mjs  对着活着的 dsh 进程验设置页契约（重启后跑�
 14. **设置页读的是 `/status` 的顶层字段**（`st.enabled`、`st.config`、`st.logTail`、`st.login`…）。开关只放进 `config.enabled` 会让徽标永远显示「已停用」——两处都要有。
 15. **测试脚本不许把运行时状态写进仓库。** `selfcheck.round.mjs` 的 `--dir` 为空（shell 把 `--dir=X` 拆成 `--dir=` + X 时就会）或指向插件包目录时**直接拒绝**；`.gitignore` 覆盖 `out/ seen.md state.json surf.log config.json credential.json`。踩过一次：空 `--dir` 让一轮的 `out/`、`seen.md` 落进仓库，被 `git add -A` 顺手提交了。
 16. **`dryRun` 是「真演练」，不是「跳过」。** 评论照样让助手写、照样过 `normalizeComment`、照样记进报告（**本轮评论**：演练）与台账（备注「演练（没真发）」），只压住最后那次 `sendComment`。如果 dryRun 直接跳过整段，设置页开了 `autoComment` 也看不出任何差别，用户就没法在不发帖的前提下验这条链。
+17. **扫码状态在 `data.data.code`，外层的 `code` 恒为 0。** passport 的 `x/passport-login/web/qrcode/poll` 回包是两层的：外层 `code:0` 只说「这次请求本身成功」，真正的扫码状态在内层 `data.code`（`86101` 未扫 / `86090` 已扫待确认 / `86038` 过期 / `0` 成功）。读外层就会**一按「生成二维码」就报登录成功**，而且此后每次读字幕/热评/发评论都静默降级成游客。踩过一次 —— 离线 stub 当时写的是错形状，62 项全绿也没拦住，是「对着活着的 dsh 打真实 passport」才抓到的。同一处还有第二个坑：`pickCredentials` 曾返回 `{}`（真值！），于是 `if (credentials)` 判定为「拿到凭证了」；现在没有 `sessdata` 一律返回 `undefined`，两处闸门都写成 `r.credentials?.sessdata`。
+18. **写 stub 之前先用真接口打一遍，把回包原样抄下来。** 尤其是「有没有 `code` 信封」这种一眼看不出的事（字幕正文那个接口就没有信封）。stub 的形状错了，整套自检会变成一场自我安慰。
 
 ## B 站接口的真实行为（实测，别再踩）
 

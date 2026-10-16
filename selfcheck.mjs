@@ -516,6 +516,7 @@ check('cookie 名双向映射：小写凭证回填成官方名（SESSDATA/DedeUs
   ok(!/(^|; )sessdata=/.test(h), '不能把小写键原样发出去')
   const picked = BiliClient.pickCredentials({ SESSDATA: 'aaa', DedeUserID: '42', b_nut: 'x' })
   eq(Object.keys(picked).sort().join(','), 'dedeuserid,sessdata', 'pickCredentials 只留四个键、且输出小写')
+  eq(BiliClient.pickCredentials({ b_nut: 'x' }), undefined, '没有 sessdata 就等于没有登录态，必须给 undefined 而不是 {}')
   eq(picked.sessdata, 'aaa')
 })
 
@@ -820,6 +821,73 @@ async function hostTests() {
     } finally {
       globalThis.fetch = realFetch
       // 这个用例建了一个登录会话，得清掉，否则后面的「没有会话时软失败」用例就被它带跑偏了
+      await call('POST', '/api/bili-surfer/logout', {})
+    }
+  })
+
+  await checkAsync('扫码状态机：外层 code 恒为 0，状态在 data.data.code（读错就会「还没扫就说登录成功」）', async () => {
+    const realFetch = globalThis.fetch
+    const url = 'https://account.bilibili.com/h5/account-h5/auth/scan-web?navhide=1&qrcode_key=deadbeefdeadbeef'
+    // ⚠️ 这是 passport 的**真实回包形状**（2026-10 实测）：外层 code=0 表示「这次请求本身成功」，
+    // 扫码状态在内层 data.code。以前我把外层当状态读 → 一按「生成二维码」就报登录成功。
+    const env = (inner, message) => ({ code: 0, message: 'OK', ttl: 1, data: { url: '', refresh_token: '', timestamp: 0, code: inner, message } })
+    let pollBody = env(86101, '未扫码')
+    let setCookie = []
+    globalThis.fetch = async (u) => {
+      const s = String(u)
+      const reply = (body) => ({ status: 200, headers: { getSetCookie: () => setCookie }, text: async () => JSON.stringify(body) })
+      if (s.includes('finger/spi')) return reply({ code: 0, data: { b_3: 'buv3', b_4: 'buv4' } })
+      if (s.includes('qrcode/generate')) return reply({ code: 0, message: 'OK', ttl: 1, data: { url, qrcode_key: 'deadbeefdeadbeef' } })
+      if (s.includes('qrcode/poll')) return reply(pollBody)
+      throw new Error(`测试没预料到的请求：${s}`)
+    }
+    const credFile = join(home, 'bili-surfer', 'credential.json')
+    const startAndPoll = async () => {
+      const st = await call('POST', '/api/bili-surfer/login/start', {})
+      ok(st.json.ok, `login/start 要成功：${JSON.stringify(st.json)}`)
+      return call('POST', '/api/bili-surfer/login/poll', {})
+    }
+    try {
+      // ① 未扫码：外层 code=0 也不能当成成功
+      let r = await startAndPoll()
+      eq(r.json.status, 'waiting', `86101 必须是「等待扫码」，实际 ${JSON.stringify(r.json)}`)
+      eq(r.json.loggedIn, false, '还没扫就不许说登录成功')
+      ok(!existsSync(credFile), '没扫成功就不许写凭证文件')
+
+      // ② 已扫码待确认
+      pollBody = env(86090, '扫码成功，请在手机上确认')
+      r = await call('POST', '/api/bili-surfer/login/poll', {})
+      eq(r.json.status, 'scanned', '86090 是已扫待确认')
+      ok(/确认/.test(r.json.text), `要告诉用户去手机上确认：${r.json.text}`)
+
+      // ③ 过期
+      pollBody = env(86038, '二维码已失效')
+      r = await call('POST', '/api/bili-surfer/login/poll', {})
+      eq(r.json.status, 'expired', '86038 是过期')
+
+      // ④ 状态说成功、但没有 Set-Cookie：不许装作登录成功
+      pollBody = env(0, '0')
+      setCookie = []
+      r = await startAndPoll()
+      eq(r.json.loggedIn, false, '没有 Set-Cookie 时不许说登录成功')
+      ok(!existsSync(credFile), '没拿到凭证就不许写凭证文件')
+
+      // ⑤ 真成功：data.code=0 且响应带 Set-Cookie
+      setCookie = ['SESSDATA=abc%2Cdef; Path=/; HttpOnly', 'bili_jct=jjj; Path=/', 'DedeUserID=42; Path=/', 'buvid3=bv3; Path=/']
+      r = await startAndPoll()
+      eq(r.json.loggedIn, true, `带 Set-Cookie 的成功才算成功：${JSON.stringify(r.json)}`)
+      const saved = JSON.parse(readFileSync(credFile, 'utf8'))
+      eq(saved.sessdata, 'abc%2Cdef', '凭证按小写键存盘')
+      eq(saved.dedeuserid, '42', 'mid 也要存下来')
+      ok(!JSON.stringify(r.json).includes('abc'), '凭证不许出现在响应里（会进对话）')
+
+      // ⑥ 退出登录 = 文件消失
+      await call('POST', '/api/bili-surfer/logout', {})
+      ok(!existsSync(credFile), 'logout 之后凭证文件必须消失')
+      const st = await call('GET', '/api/bili-surfer/status')
+      eq(st.json.loggedIn, false, '/logout 之后 /status 该说没登录')
+    } finally {
+      globalThis.fetch = realFetch
       await call('POST', '/api/bili-surfer/logout', {})
     }
   })
