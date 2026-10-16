@@ -74,6 +74,7 @@ bundle（插件挂上了、路由通了，跑的却还是挂载那一刻的旧�
 | `seen.md` | 看过的台账（Markdown 表格，可手改） |
 | `out/<日期>.md` | 每日报告 |
 | `surf.log` | 逐行日志（设置页只显示尾部 2KB） |
+| `surfer.md` | 章程副本（纪律/边界/评论文风）。**你改过它就不会被覆盖**，插件自带的新版会落成 `surfer.md.new` |
 | `credential.json` | 扫码登录得到的 `sessdata/bili_jct/buvid3/dedeuserid` |
 
 ## 能力边界（诚实版）
