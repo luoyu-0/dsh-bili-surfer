@@ -662,6 +662,35 @@ async function hostTests() {
     }
   })
 
+  await checkAsync('POST /login/start：rows 是等长 0/1 字符串，且逐格等于 qrMatrix(登录 URL)', async () => {
+    const realFetch = globalThis.fetch
+    const url = 'https://account.bilibili.com/h5/account-h5/auth/scan-web?navhide=1&qrcode_key=deadbeefdeadbeef'
+    globalThis.fetch = async (u) => {
+      const s = String(u)
+      const reply = (body) => ({ status: 200, headers: { getSetCookie: () => [] }, text: async () => JSON.stringify(body) })
+      if (s.includes('finger/spi')) return reply({ code: 0, data: { b_3: 'buv3', b_4: 'buv4' } })
+      if (s.includes('qrcode/generate')) return reply({ code: 0, message: '0', data: { url, qrcode_key: 'deadbeefdeadbeef' } })
+      throw new Error(`测试没预料到的请求：${s}`)
+    }
+    try {
+      const r = await call('POST', '/api/bili-surfer/login/start', {})
+      ok(r.json.ok, `login/start 应该是 ok：${JSON.stringify(r.json)}`)
+      eq(r.json.url, url)
+      const rows = r.json.rows
+      ok(Array.isArray(rows), 'rows 必须是数组')
+      eq(rows.length, r.json.size, 'rows 行数要等于 size')
+      ok(rows.every((s) => typeof s === 'string'), '每行必须是字符串（数字数组会让 canvas 全白）')
+      ok(rows.every((s) => /^[01]+$/.test(s) && s.length === rows.length), '每行必须是等长的 0/1 串')
+      const want = qrMatrix(url).modules.map((line) => line.join('')).join('\n')
+      eq(rows.join('\n'), want, '服务端给的矩阵必须逐格等于 qrMatrix(登录 URL)')
+      ok(!JSON.stringify(r.json).includes('sessdata'), '响应里不许出现凭证')
+    } finally {
+      globalThis.fetch = realFetch
+      // 这个用例建了一个登录会话，得清掉，否则后面的「没有会话时软失败」用例就被它带跑偏了
+      await call('POST', '/api/bili-surfer/logout', {})
+    }
+  })
+
   await checkAsync('POST /config 改配置后能读回（并再次过一遍白名单）', async () => {
     const { json } = await call('POST', '/api/bili-surfer/config', { patch: { perDay: 3, keywords: ['测试'], evil: 1, source: '不存在的来源' } })
     eq(json.ok, true)
@@ -747,7 +776,18 @@ function makeFakeReact() {
     if (props && typeof props.onClick === 'function') out.clickables.push({ label: flat(kids).trim(), onClick: props.onClick })
     if (type === '#fragment') { walk(kids, out); return }
     if (typeof type === 'string') {
-      if (type === 'canvas') out.canvas++
+      if (type === 'canvas') {
+        out.canvas++
+        out.canvases = out.canvases || []
+        // 假 canvas：把所有 fillRect 记下来，这样「二维码画出来长什么样」可以逐像素核对
+        const ctx = { fillStyle: '', rects: [], fillRect(x, y, w, h) { this.rects.push([x, y, w, h]) } }
+        node.getContext = (kind) => {
+          if (kind !== '2d') throw new Error(`只支持 2d，实际要 ${kind}`)
+          return ctx
+        }
+        if (props && props.ref && typeof props.ref === 'object') props.ref.current = node
+        out.canvases.push({ node, ctx })
+      }
       if (typeof kids === 'string') out.text += `${kids}\n`
       walk(kids, out)
       return
@@ -943,13 +983,36 @@ await checkAsync('设置页交互：刷一轮 / 看报告 / 看台账 都打到�
   ok(out.text.includes('台账正文在这里'), '台账正文没渲染')
 })
 
-await checkAsync('扫码登录：画二维码 + 起 3s 轮询，卸载时把轮询清掉', async () => {
-  clientEnv.routes['/api/bili-surfer/login/start'] = { ok: true, url: 'https://passport.bilibili.com/x', rows: ['010', '101', '010'] }
+await checkAsync('扫码登录：矩阵逐像素画到 canvas + 3s 轮询 + 卸载时清掉', async () => {
+  const url = 'https://account.bilibili.com/h5/account-h5/auth/scan-web?qrcode_key=0123456789abcdef'
+  const m = qrMatrix(url)
+  const rows = m.modules.map((r) => r.join(''))
+  clientEnv.routes['/api/bili-surfer/login/start'] = { ok: true, url, size: m.size, rows }
   clientEnv.routes['/api/bili-surfer/login/poll'] = { ok: true, status: 'scanned', text: '扫到了，等确认' }
   let out = await renderSettled()
   out = await click(out, '扫码登录')
   ok(clientEnv.fetched.some((f) => f.method === 'POST' && f.url === '/api/bili-surfer/login/start'), '没发 /login/start')
   eq(out.canvas, 1, '二维码 canvas 没画出来')
+
+  const { node, ctx } = out.canvases[0]
+  const scale = Math.max(2, Math.floor(232 / m.size))
+  eq(node.width, m.size * scale, 'canvas 宽度')
+  eq(node.height, m.size * scale, 'canvas 高度')
+  const dark = m.modules.flat().filter(Boolean).length
+  eq(ctx.rects.length, 1 + dark, `矩形数 = 1 个白底 + ${dark} 个暗模块`)
+  eq(JSON.stringify(ctx.rects[0]), JSON.stringify([0, 0, node.width, node.height]), '第一笔必须是铺满整块的白底')
+
+  // 把画出来的矩形还原成矩阵，逐格跟 qrMatrix 对比 —— 用户手机扫的就是这些像素
+  const grid = Array.from({ length: m.size }, () => new Array(m.size).fill(0))
+  for (const [x, y, w, h] of ctx.rects.slice(1)) {
+    eq(w, scale, '暗块宽度')
+    eq(h, scale, '暗块高度')
+    eq(x % scale, 0, '暗块 x 要对齐网格')
+    eq(y % scale, 0, '暗块 y 要对齐网格')
+    grid[y / scale][x / scale] = 1
+  }
+  eq(grid.map((r) => r.join('')).join('\n'), rows.join('\n'), 'canvas 上的图案必须逐格等于矩阵')
+
   ok(clientEnv.intervals.some((i) => i.ms === 3000), '没起 3s 轮询')
   const before = clientEnv.cleared.length
   for (const c of out.cleanups) c.cleanup()

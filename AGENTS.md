@@ -64,6 +64,14 @@ selfcheck.round.mjs 联网跑一整轮（临时目录）
 - 字幕是「人工 + AI」混在一个列表里；排序优先级 `zh-CN → zh-Hans → zh-Hant → ai-zh → zh → en`。
 - 弹幕 90% 是「哈哈哈哈」和复读，`pickDanmaku()` 会先挑长且不重复的。
 
+## 二维码是怎么验的（三层，别只信第一层）
+
+手写 QR 编码器是这个插件里最容易「看起来对、扫不出来」的东西，所以验三层：
+
+1. **编码器内部**（`selfcheck.mjs` A 段）：格式信息真值（ECC=M + mask0 必须是 `0x5412`）、版本信息真值（v7 = `0x07C94`）、RS 纠错的综合校验、数据模块往返解码。
+2. **宿主 → 浏览器**（C/C2 段，两边都逐格比字符串，不是「有没有 canvas」）：`POST /login/start` 返回的 `rows` 必须逐格等于 `qrMatrix(登录 URL)`；`client.js` 画到 canvas 的矩形还原成矩阵后也必须逐格等于同一个矩阵。
+3. **第三方解码器**（唯一真正独立的验证；不进仓库，保持插件零依赖）：在插件目录之外的临时目录 `pnpm add jsqr`，把矩阵按 scale 3 与 8 画成 RGBA 交给 jsQR，比对解出的字符串。已过：v1 / v4 / v8（真实 passport URL）/ v12 / v20。
+
 ## 评审清单（提交前自查）
 
 - [ ] `node selfcheck.mjs` 全绿
