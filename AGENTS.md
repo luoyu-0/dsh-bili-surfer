@@ -36,7 +36,7 @@ selfcheck.host.mjs  对着活着的 dsh 进程验契约（`--login` 顺带打一
 6. **落盘只写 `<DSH_HOME>/bili-surfer/`。** 插件包目录可能是只读的（也是发布目录）。
 7. **一轮里的任何异常都不能逃逸到宿主。** `runRound` 的每一步都单独 try/catch，最外层再兜一次；失败也要留下报告与台账（章程「底线产出」）。
 8. **`settings.register` 的 entry id 必须等于命名空间名**，且至少要有一个字段带 `volatile`，否则 `settings.update()` 会抛 `has no volatile fields`。
-9. **改完必须重启 dsh。** bundle 的 patch 只在启动时读，profile 层不热重载。但别指望「没重启 ⇒ 插件不存在」：实测 DSH **会**热挂新加进 profile 的 bundle（插件挂上了、路由 200 了，跑的还是挂载那一刻的旧代码）。所以判断依据是 `/status` 的 `build` —— 它是**加载时**算的源码指纹（`lib/state.mjs:buildStamp`，8 位），`node selfcheck.host.mjs` 会拿它跟磁盘上现算的比，不一致就是旧构建。踩过好几次：靠「缺不缺某个字段」猜旧代码，猜得很费劲。
+9. **改完必须重启 dsh。** bundle 的 patch 只在启动时读，profile 层不热重载。但别指望「没重启 ⇒ 插件不存在」：实测 DSH **会**热挂新加进 profile 的 bundle（插件挂上了、路由 200 了，跑的还是挂载那一刻的旧代码）。所以判断依据是 `/status` 的 `build` —— 它是**加载时**算的源码指纹（`lib/state.mjs:buildStamp`，8 位；只盖宿主那一半：index.js + lib/*.mjs + package.json），`node selfcheck.host.mjs` 会拿它跟磁盘上现算的比，不一致就是旧构建。**client.js 故意不进指纹**：浏览器是页面加载时现取它的，改 UI 只需刷新页面，为它重启整个 dsh 不值。踩过好几次：靠「缺不缺某个字段」猜旧代码，猜得很费劲。
 10. **凭证只在 `<home>/credential.json`**，永远不进日志、不进报告、不进 HTTP 响应。工具结果也不许带 cookie（`bili_surf_login` 的 poll 分支只回 `saved/loggedIn`）。
 11. **cookie 名大小写敏感。** 盘上存小写（`sessdata`/`bili_jct`/`buvid3`/`dedeuserid`），发给 B 站必须用官方名 `SESSDATA`/`bili_jct`/`buvid3`/`DedeUserID`。`lib/net.mjs` 的 `COOKIE_ALIAS` 负责双向映射，**读写都要过它**（`setCookies` 进罐子、`pickCredentials` 从二维码响应的 Set-Cookie 出来）。踩过一次：小写直接进罐子 → `cli.loggedIn` 永远 false、Cookie 头里的名字 B 站不认 → **扫码登录成功，但字幕/热评/发评论全部静默降级成游客**。参考实现也因此手拼 Cookie 头（`D:\everything\dsh\_ref\dsh-bili-scroll\lib\verify.mjs:56`）。
 12. **`saveCredential(dir, null)` 是删文件，不是写一个 `null`。** 退出登录要真把 cookie 从盘上抹掉。

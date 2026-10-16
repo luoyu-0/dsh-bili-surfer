@@ -91,7 +91,7 @@ ok(typeof st.version === 'string' && st.version.length > 0, 'st.version 要有�
   ok(
     disk && st.build === disk,
     `跑的是不是磁盘上这份代码：活的 build=${JSON.stringify(st.build)}，磁盘 ${JSON.stringify(disk)}` +
-      (st.build === undefined ? ' —— 旧构建连 build 字段都没有，重启 dsh' : ' —— 不一致：改完代码要重启 dsh'),
+      (st.build === undefined ? ' —— 旧构建连 build 字段都没有，重启 dsh' : ' —— 不一致：宿主代码改了，要重启 dsh（只改了 client.js 的话刷新页面就够）'),
   )
 }
 ok(Array.isArray(st.fields) && st.fields.length >= 10, `st.fields 要是一张够全的表（实际 ${st.fields?.length}）`)
