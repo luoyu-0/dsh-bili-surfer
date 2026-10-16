@@ -39,7 +39,10 @@ pnpm add "link:D:/everything/dsh/dsh-bili-surfer"
 # profile 的 package.json 里 dsh.profile.bundles 要加上 "dsh-bili-surfer"
 ```
 
-**装完必须重启 DSH**（bundle 的 patch 只在启动时读，profile 层不热重载）。重启后：**设置 → 刷B站**。
+**装完要重启 DSH**：bundle 的 patch 只在启动时读。注意 profile 变化时 DSH **会**热挂新
+bundle（插件挂上了、路由通了，跑的却还是挂载那一刻的旧代码），所以「设置页出现了刷B站」
+不等于「跑的是你刚改的代码」——判断依据见下面的「开发」一节（`/status` 的 `build`）。
+重启后：**设置 → 刷B站**。
 
 ## 设置项
 
@@ -53,6 +56,7 @@ pnpm add "link:D:/everything/dsh/dsh-bili-surfer"
 | `maxAgeDays` | `30` | 超过这个天数的不看 |
 | `readDanmaku` / `danmakuNum` | `true` / `200` | 读弹幕（游客可用，是最稳的内容信号） |
 | `readComments` / `commentNum` | `true` / `20` | 读热评（登录后更全） |
+| `excerptChars` | `1200` | 报告里「内容摘录」最多多少字（字幕/摘要/弹幕/简介四个来源共用这一个上限） |
 | `autoComment` | `false` | **默认关**。开启后对最值得的 1–3 条发评论 |
 | `mentionName` | 空 | 要 @ 的名字（不带 @）。为空则即使开了 `autoComment` 也不发 |
 | `commentMax` | `150` | 评论长度上限 |
@@ -77,7 +81,8 @@ pnpm add "link:D:/everything/dsh/dsh-bili-surfer"
 - **未登录**：搜索、弹幕、简介、标签、热门、推荐都能用；**字幕和 AI 摘要读不到**（b 站只在登录后下发），评论也发不出去。此时报告按「弹幕 + 简介」降级。
 - **字幕本来就不多**：B 站 UGC 视频大部分没有 CC 字幕，即使登录也可能为空。这不是 bug，报告里会写明「无字幕」。
 - **`/x/player/wbi/v2`、`conclusion/get`、`reply/add` 都需要登录**（未登录分别返回 `-101` / `-403`）。
-- **发评论后不一定立刻公开**：新号/低频号会先审后放，插件会在 90 秒后回头查一次并在报告里写「可见 / 暂时不可见 / 没查到」——措辞永远是「没查到」，不说「没发出去」。
+- **发评论后不一定立刻公开**：新号/低频号会先审后放。插件发完**马上**回头查一次可见性
+  （`isCommentVisible`），报告里写「可见 / 暂时不可见 / 没查到」——查不到时措辞永远是「没查到」，不说「没发出去」。
 
 ## 开发
 

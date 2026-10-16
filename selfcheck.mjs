@@ -987,6 +987,22 @@ async function hostTests() {
     ok(!existsSync(join(home, 'bili-surfer', 'credential.json')), '没登录就不该有凭证文件')
   })
 
+  await checkAsync('README 的「设置项」表与代码里的字段表一一对应（文档不许落后于代码）', async () => {
+    const { json } = await call('GET', '/api/bili-surfer/status')
+    const block = readFileSync(join(ROOT, 'README.md'), 'utf8').split('## 设置项')[1]?.split(/\n## /)[0] || ''
+    const documented = new Set()
+    for (const line of block.split(/\r?\n/)) {
+      if (!line.startsWith('|')) continue
+      const cell = line.split('|')[1] || ''
+      for (const m of cell.matchAll(/`([A-Za-z][A-Za-z0-9]*)`/g)) documented.add(m[1])
+    }
+    const code = new Set(json.fields.map((f) => f.key))
+    const missing = [...code].filter((k) => !documented.has(k))
+    const extra = [...documented].filter((k) => !code.has(k))
+    eq(missing.join(','), '', `README 漏了这些设置项：${missing.join(',')}`)
+    eq(extra.join(','), '', `README 写了代码里没有的设置项：${extra.join(',')}`)
+  })
+
   /* ── C3. 工具层：把工具真执行一遍 ─────────────────────────────────────
      这一层补的是「内部函数测了一堆，真正展示出去的字段却是错的」那个坑
      （搜索条目时长全显示 00:00，离线 68 项全绿也没拦住 —— 是**真去调用工具**才看见的）。
