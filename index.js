@@ -102,12 +102,24 @@ export function apply(ctx, config) {
 
   const client = () => newClient({ cookies: loadCredential(stateDir) || undefined, logger: log })
 
-  const loginState = async () => {
+  /**
+   * 「我是谁」。⚠️ whoami 打的是 B 站 nav 接口，而设置页每 5 秒轮询一次 /status ——
+   * 不缓存的话，光把设置页开着就会 5 秒一次地把 B 站敲起来，既浪费又容易踩 -412 风控。
+   * 所以这里缓存 60 秒；登录/退出/跑完一轮时显式作废。
+   */
+  const ME_TTL = 60_000
+  let meCache = { at: 0, value: null, key: '' }
+  const forgetMe = () => { meCache = { at: 0, value: null, key: '' } }
+  const loginState = async (force = false) => {
     const cred = loadCredential(stateDir)
-    if (!cred) return { loggedIn: false, uname: '', mid: 0 }
+    if (!cred) { forgetMe(); return { loggedIn: false, uname: '', mid: 0 } }
+    const key = String(cred.dedeuserid || cred.sessdata || '').slice(0, 12)
+    if (!force && meCache.value && meCache.key === key && Date.now() - meCache.at < ME_TTL) return meCache.value
     try {
       const me = await whoami(client())
-      return { loggedIn: me.loggedIn, uname: me.uname, mid: me.mid }
+      const value = { loggedIn: me.loggedIn, uname: me.uname, mid: me.mid }
+      meCache = { at: Date.now(), value, key }
+      return value
     } catch (e) {
       return { loggedIn: false, uname: '', mid: 0, error: String(e?.message || e) }
     }
@@ -374,6 +386,7 @@ export function apply(ctx, config) {
       if (action === 'status') return { ok: true, ...(await loginState()), credential: loadCredential(stateDir) ? '已保存' : '没有' }
       if (action === 'off') {
         saveCredential(stateDir, null)
+        forgetMe()
         loginSession = null
         log('已清除登录凭证')
         return { ok: true, loggedIn: false }
@@ -390,6 +403,7 @@ export function apply(ctx, config) {
         const r = await qrPoll(loginSession.cli, String(args.key || loginSession.key))
         if (r.status === 'ok' && r.credentials) {
           saveCredential(stateDir, r.credentials)
+          forgetMe()
           log(`登录成功：${r.credentials.dedeuserid || ''}`)
           loginSession = null
           // ⚠️ 凭证绝不回传给对话（工具结果会进 transcript）——只回状态
@@ -513,6 +527,7 @@ export function apply(ctx, config) {
       const r = await qrPoll(loginSession.cli, loginSession.key)
       if (r.status === 'ok' && r.credentials) {
         saveCredential(stateDir, r.credentials)
+        forgetMe()
         log('扫码登录成功')
         loginSession = null
         return sendJson(res, 200, { ok: true, status: r.status, text: r.text, loggedIn: true })
@@ -522,6 +537,7 @@ export function apply(ctx, config) {
     }
     if (POST && path === '/logout') {
       saveCredential(stateDir, null)
+      forgetMe()
       loginSession = null
       log('设置页退出了登录')
       return sendJson(res, 200, { ok: true, loggedIn: false })

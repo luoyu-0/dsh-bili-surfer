@@ -22,8 +22,8 @@ import {
   DEFAULTS, appendLog, clamp, dayKey, ensureFiles, fmtAge, mtime, normalize,
   readJson, readText, resolveHome, stateDirOf, tail, writeJson, writeText,
 } from './lib/state.mjs'
-import { mixinKey, signWbi, UA } from './lib/net.mjs'
-import { fmtCount, fmtTime, stripHtml } from './lib/bili.mjs'
+import { BiliClient, mixinKey, signWbi, UA } from './lib/net.mjs'
+import { fmtCount, fmtTime, newClient, stripHtml } from './lib/bili.mjs'
 import {
   firstSentence, normalizeComment, paths, pickDanmaku, scoreCandidate,
 } from './lib/surf.mjs'
@@ -487,6 +487,21 @@ check('UA 常量像浏览器（B 站会挑 UA）', () => {
   ok(UA.includes('Mozilla/5.0'), UA)
 })
 
+// ⚠️ 这条是真实事故的回归测试：cookie 名大小写敏感，凭证文件存小写、
+// 回填时必须映射成官方名，否则「扫码成功但读字幕仍是游客」，且全程不报错。
+check('cookie 名双向映射：小写凭证回填成官方名（SESSDATA/DedeUserID）', () => {
+  const cli = newClient({ cookies: { sessdata: 'aaa', bili_jct: 'bbb', buvid3: 'ccc', dedeuserid: '42' } })
+  eq(cli.loggedIn, true, '小写 sessdata 必须让客户端认为自己已登录')
+  eq(cli.csrf, 'bbb', 'csrf 取的是 bili_jct')
+  const h = cli.cookieHeader
+  ok(h.includes('SESSDATA=aaa'), `请求头里必须是官方名：${h}`)
+  ok(h.includes('DedeUserID=42'), `请求头里必须是官方名：${h}`)
+  ok(!/(^|; )sessdata=/.test(h), '不能把小写键原样发出去')
+  const picked = BiliClient.pickCredentials({ SESSDATA: 'aaa', DedeUserID: '42', b_nut: 'x' })
+  eq(Object.keys(picked).sort().join(','), 'dedeuserid,sessdata', 'pickCredentials 只留四个键、且输出小写')
+  eq(picked.sessdata, 'aaa')
+})
+
 check('compileParams：根节点不带 additionalProperties，required 只列必填', () => {
   const s = compileParams({
     bvid: { type: 'string', required: true, description: 'BV' },
@@ -606,6 +621,45 @@ async function hostTests() {
     eq(json.config.dryRun, true, '演练模式默认开')
     ok(typeof json.home === 'string' && json.home.startsWith(home), json.home)
     ok(Array.isArray(json.logTail === '' ? [] : json.logTail.split('\n')), 'logTail 是字符串')
+  })
+
+  await checkAsync('凭证存在时 /status 会读 B 站，但 60 秒内只读一次（设置页 5 秒轮询一次）', async () => {
+    const st0 = await call('GET', '/api/bili-surfer/status')
+    eq(st0.json.loggedIn, false, '没有凭证时不该是已登录')
+    writeJson(join(st0.json.home, 'credential.json'), { sessdata: 'S', bili_jct: 'J', buvid3: 'B', dedeuserid: '42' })
+
+    const seen = []
+    const realFetch = globalThis.fetch
+    globalThis.fetch = async (url, init) => {
+      seen.push({ url: String(url), cookie: String(init?.headers?.Cookie || '') })
+      return {
+        status: 200,
+        headers: { getSetCookie: () => [] },
+        text: async () => JSON.stringify({ code: 0, message: '0', data: { isLogin: true, uname: '测试用户', mid: 42 } }),
+      }
+    }
+    try {
+      const a = await call('GET', '/api/bili-surfer/status')
+      eq(a.json.loggedIn, true, `带凭证的 /status 要是已登录：${JSON.stringify(a.json)}`)
+      eq(a.json.uname, '测试用户')
+      eq(a.json.hasCredential, true)
+      eq(seen.length, 1, '第一次要真去问 B 站')
+      ok(seen[0].url.includes('/x/web-interface/nav'), `问的必须是 nav 接口：${seen[0].url}`)
+      ok(seen[0].cookie.includes('SESSDATA=S'), `请求要带上官方名的 cookie：${seen[0].cookie}`)
+      ok(seen[0].cookie.includes('bili_jct=J'), `csrf 也要带上：${seen[0].cookie}`)
+
+      const b = await call('GET', '/api/bili-surfer/status')
+      eq(b.json.loggedIn, true)
+      eq(seen.length, 1, '60 秒内第二次 /status 必须走缓存，不能再打 B 站')
+
+      await call('POST', '/api/bili-surfer/logout', {})
+      const c = await call('GET', '/api/bili-surfer/status')
+      eq(c.json.loggedIn, false, '退出后要立刻不再是已登录（缓存必须作废）')
+      eq(c.json.hasCredential, false)
+      eq(seen.length, 1, '没有凭证时根本不该发请求')
+    } finally {
+      globalThis.fetch = realFetch
+    }
   })
 
   await checkAsync('POST /config 改配置后能读回（并再次过一遍白名单）', async () => {

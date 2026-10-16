@@ -25,13 +25,21 @@
 
 ## 安装
 
+用 DSH 自带的插件管理器（或 CLI）：
+
 ```bash
-# 在 DSH 仓库/任意目录
 dsh plugin --profile desktop add file:D:/everything/dsh/dsh-bili-surfer
-# 然后重启 DSH（bundle 的 patch 只在启动时读）
 ```
 
-装好后：**设置 → 刷B站**。
+本机没有全局 `dsh` CLI，所以是直接在 profile 目录里挂的软链（改代码后重启即生效，不用重装）：
+
+```powershell
+cd "$env:USERPROFILE\.dsh\profiles\desktop"
+pnpm add "link:D:/everything/dsh/dsh-bili-surfer"
+# profile 的 package.json 里 dsh.profile.bundles 要加上 "dsh-bili-surfer"
+```
+
+**装完必须重启 DSH**（bundle 的 patch 只在启动时读，profile 层不热重载）。重启后：**设置 → 刷B站**。
 
 ## 设置项
 

@@ -36,7 +36,11 @@ selfcheck.round.mjs 联网跑一整轮（临时目录）
 7. **一轮里的任何异常都不能逃逸到宿主。** `runRound` 的每一步都单独 try/catch，最外层再兜一次；失败也要留下报告与台账（章程「底线产出」）。
 8. **`settings.register` 的 entry id 必须等于命名空间名**，且至少要有一个字段带 `volatile`，否则 `settings.update()` 会抛 `has no volatile fields`。
 9. **改完必须重启 dsh。** bundle 的 patch 只在启动时读，profile 层不热重载。
-10. **凭证只在 `<home>/credential.json`**，永远不进日志、不进报告、不进 HTTP 响应。
+10. **凭证只在 `<home>/credential.json`**，永远不进日志、不进报告、不进 HTTP 响应。工具结果也不许带 cookie（`bili_surf_login` 的 poll 分支只回 `saved/loggedIn`）。
+11. **cookie 名大小写敏感。** 盘上存小写（`sessdata`/`bili_jct`/`buvid3`/`dedeuserid`），发给 B 站必须用官方名 `SESSDATA`/`bili_jct`/`buvid3`/`DedeUserID`。`lib/net.mjs` 的 `COOKIE_ALIAS` 负责双向映射，**读写都要过它**（`setCookies` 进罐子、`pickCredentials` 从二维码响应的 Set-Cookie 出来）。踩过一次：小写直接进罐子 → `cli.loggedIn` 永远 false、Cookie 头里的名字 B 站不认 → **扫码登录成功，但字幕/热评/发评论全部静默降级成游客**。参考实现也因此手拼 Cookie 头（`D:\everything\dsh\_ref\dsh-bili-scroll\lib\verify.mjs:56`）。
+12. **`saveCredential(dir, null)` 是删文件，不是写一个 `null`。** 退出登录要真把 cookie 从盘上抹掉。
+13. **别在轮询路由里直连网络。** 设置页每 5 秒打一次 `GET /status`，而 `/status` 要显示登录名 → `whoami` 必须带 TTL 缓存（`index.js` 的 `ME_TTL = 60_000` + `forgetMe()`，登录/退出时作废）。否则用户开着设置页就等于每分钟打 12 次 B 站。
+14. **设置页读的是 `/status` 的顶层字段**（`st.enabled`、`st.config`、`st.logTail`、`st.login`…）。开关只放进 `config.enabled` 会让徽标永远显示「已停用」——两处都要有。
 
 ## B 站接口的真实行为（实测，别再踩）
 
