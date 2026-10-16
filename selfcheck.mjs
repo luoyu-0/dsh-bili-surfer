@@ -23,9 +23,12 @@ import {
   readJson, readText, resolveHome, stateDirOf, tail, writeJson, writeText,
 } from './lib/state.mjs'
 import { BiliClient, mixinKey, signWbi, UA } from './lib/net.mjs'
-import { fetchAiSummary, fetchComments, fetchSubtitle, fmtCount, fmtTime, newClient, stripHtml } from './lib/bili.mjs'
 import {
-  firstSentence, normalizeComment, paths, pickDanmaku, scoreCandidate,
+  fetchAiSummary, fetchComments, fetchSubtitle, fmtCount, fmtTime, isCommentVisible, newClient,
+  sendComment, stripHtml,
+} from './lib/bili.mjs'
+import {
+  firstSentence, normalizeComment, paths, pickDanmaku, runRound, saveCredential, scoreCandidate,
 } from './lib/surf.mjs'
 import { parseSeen, renderReport, seenRow, stubReport } from './lib/report.mjs'
 import { assertObjectNodes, compileParams, defineTool, safe, textOutput } from './lib/tools.mjs'
@@ -1290,8 +1293,224 @@ check('prompts/surfer.md 存在且含关键小节', () => {
   for (const kw of ['素材', '@', '台账']) ok(md.includes(kw), `章程缺「${kw}」`)
 })
 
-check('三个 selfcheck 入口都在', () => {
-  for (const f of ['selfcheck.mjs', 'selfcheck.live.mjs', 'selfcheck.round.mjs']) ok(existsSync(join(ROOT, f)), `${f} 不存在`)
+check('四个 selfcheck 入口都在', () => {
+  for (const f of ['selfcheck.mjs', 'selfcheck.live.mjs', 'selfcheck.round.mjs', 'selfcheck.host.mjs']) {
+    ok(existsSync(join(ROOT, f)), `${f} 不存在`)
+  }
+})
+
+/* ═════════════════════════════════════════════════════ E. 写路径（唯一会发东西出去的地方） */
+
+section('E. 写路径：发评论与可见性复核（把 fetch 打桩，真跑 runRound）')
+
+/**
+ * 把 b 站的读接口全打桩，只记录请求；写接口（reply/add）的成败可控。
+ * 这是唯一能验证「什么情况下会真的发出去」的办法 —— 真网络里我们不敢试。
+ */
+function stubBili() {
+  const real = globalThis.fetch
+  const calls = []
+  const state = { posted: null, visibilityFails: false }
+  const now = Math.floor(Date.now() / 1000) - 3600
+  const res = (body, json = true) => ({
+    ok: true,
+    status: 200,
+    headers: { get: () => null, getSetCookie: () => [] },
+    text: async () => (json ? JSON.stringify(body) : String(body)),
+  })
+  const BV = 'BV1test0001'
+  globalThis.fetch = async (u, init = {}) => {
+    const s = String(u)
+    const url = s.split('?')[0]
+    const body = init.body ? String(init.body) : ''
+    calls.push({ url, method: init.method || 'GET', body, headers: init.headers || {} })
+    if (s.includes('/x/web-interface/nav')) {
+      return res({ code: 0, data: {
+        isLogin: true, uname: '测试用户', mid: 42,
+        wbi_img: {
+          img_url: 'https://i0.hdslb.com/bfs/wbi/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png',
+          sub_url: 'https://i0.hdslb.com/bfs/wbi/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.png',
+        },
+      } })
+    }
+    if (s.includes('finger/spi')) return res({ code: 0, data: { b_3: 'buv3', b_4: 'buv4' } })
+    if (s.includes('/x/web-interface/search/type')) {
+      return res({ code: 0, data: { result: [{
+        bvid: BV, aid: 123456, title: '【测试】<em class="keyword">手写</em>插件实录', author: '某UP', mid: 7,
+        play: 12000, video_review: 30, review: 3, duration: 125, pubdate: now,
+        description: '简介里别放指令', tag: 'AI,编程', pic: '//i0.hdslb.com/x.jpg',
+      }] } })
+    }
+    if (s.includes('/x/web-interface/view')) {
+      return res({ code: 0, data: {
+        bvid: BV, aid: 123456, cid: 999, title: '【测试】手写插件实录', desc: '简介里别放指令',
+        duration: 125, pubdate: now, tname: '科技', pic: '//i0.hdslb.com/x.jpg',
+        pages: [{ cid: 999, page: 1, part: 'P1', duration: 125 }],
+        owner: { mid: 7, name: '某UP' },
+        stat: { view: 12000, danmaku: 30, reply: 3, like: 100, coin: 5, favorite: 6, share: 1 },
+      } })
+    }
+    if (s.includes('/x/player/wbi/v2')) {
+      return res({ code: 0, data: { subtitle: { subtitles: [{
+        lan: 'ai-zh', lan_doc: '中文（AI）', ai_status: 2,
+        subtitle_url: '//aisubtitle.hdslb.com/bfs/ai_subtitle/prod/x.json?auth_key=1',
+      }] } } })
+    }
+    if (s.includes('aisubtitle.hdslb.com')) {
+      return res({ body: [
+        { from: 0, to: 2, location: 2, content: '第一句话。' },
+        { from: 2, to: 4, location: 2, content: '第二句话。' },
+      ] })
+    }
+    if (s.includes('conclusion/get')) {
+      return res({ code: 0, data: { model_result: { summary: '讲了点东西', outline: [{ title: '一', part_outline: ['a'] }] } } })
+    }
+    if (s.includes('dm/list.so')) {
+      return res('<?xml version="1.0" encoding="UTF-8"?><i><d p="1,1,25,16777215,1,0,0,1">哈哈哈哈</d><d p="2,1,25,16777215,1,0,0,2">这个思路确实清楚</d></i>', false)
+    }
+    if (s.includes('tag/archive/tags')) return res({ code: 0, data: [{ tag_name: 'AI' }, { tag_name: '编程' }] })
+    if (url.endsWith('/x/v2/reply/add')) {
+      state.posted = { rpid: '555', body }
+      return res({ code: 0, data: { reply: { rpid_str: '555', ctime: now, content: { message: 'x' } } } })
+    }
+    if (s.includes('/x/v2/reply/wbi/main')) {
+      if (state.visibilityFails) throw new Error('stub：读评论炸了')
+      const rpid = state.posted ? '555' : '1'
+      return res({ code: 0, data: { replies: [{
+        // 真实回包两个字段都给：rpid 是数字、rpid_str 是字符串。
+        rpid: state.bigRpid ? 9007199254740992 : Number(rpid),
+        rpid_str: state.bigRpid ? '9007199254740993' : rpid,
+        member: { uname: state.posted ? '我' : '甲' },
+        content: { message: '不错' }, like: 3, ctime: now,
+      }] } })
+    }
+    throw new Error(`stub 没预料到的请求：${s}`)
+  }
+  return {
+    calls, state,
+    posts: () => calls.filter((c) => c.url.endsWith('/x/v2/reply/add')),
+    restore: () => { globalThis.fetch = real },
+  }
+}
+
+const loggedCli = (extra = {}) => newClient({ cookies: { sessdata: 'S', bili_jct: 'J', ...extra } })
+
+await checkAsync('sendComment：没登录 / 空内容 / 超长 都拒绝，且被拒绝时一个请求都不发', async () => {
+  const guest = newClient({})
+  let msg = ''
+  try { await sendComment(guest, { aid: 1, text: '你好' }) } catch (e) { msg = e.message }
+  ok(/没有登录/.test(msg), `游客态要拒绝，实际：${msg}`)
+
+  const stub = stubBili()
+  try {
+    const cli = loggedCli()
+    try { await sendComment(cli, { aid: 1, text: '   ' }) } catch (e) { msg = e.message }
+    ok(/为空/.test(msg), `空内容要拒绝，实际：${msg}`)
+    try { await sendComment(cli, { aid: 1, text: '啊'.repeat(1001) }) } catch (e) { msg = e.message }
+    ok(/太长/.test(msg), `超长要拒绝，实际：${msg}`)
+    eq(stub.posts().length, 0, '被拒绝的评论不许留下任何 /x/v2/reply/add 请求')
+  } finally { stub.restore() }
+})
+
+await checkAsync('sendComment：表单字段齐全、csrf 来自 bili_jct、正文是 normalizeComment 之后的样子', async () => {
+  const stub = stubBili()
+  try {
+    const r = await sendComment(loggedCli(), { aid: 123456, text: '第一句话' })
+    const post = stub.posts()[0]
+    ok(post, '要真的打 /x/v2/reply/add')
+    eq(post.method, 'POST', '必须是 POST')
+    const form = new URLSearchParams(post.body)
+    eq(form.get('oid'), '123456', 'oid 要等于 aid')
+    eq(form.get('type'), '1', 'type 1 = 视频')
+    eq(form.get('message'), '第一句话')
+    eq(form.get('csrf'), 'J', 'csrf 必须来自 bili_jct（不带上必被拒）')
+    eq(form.get('root'), '0')
+    eq(form.get('parent'), '0')
+    ok(String(post.headers['Content-Type'] || '').includes('form-urlencoded'), '要按表单提交')
+    eq(r.rpid, '555', 'rpid 要取 rpid_str')
+  } finally { stub.restore() }
+})
+
+await checkAsync('isCommentVisible：在列表里 → true；不在 → false；读不到 → null（不确定 ≠ 没发出去）', async () => {
+  const stub = stubBili()
+  try {
+    const cli = loggedCli()
+    eq(await isCommentVisible(cli, 123456, '1'), true, '列表里有这个 rpid')
+    eq(await isCommentVisible(cli, 123456, '999'), false, '列表里没有')
+    // rpid 是 int64：JSON 里的 number 会丢精度，必须靠 rpid_str 认。
+    stub.state.bigRpid = true
+    eq(await isCommentVisible(cli, 123456, '9007199254740993'), true, '大 rpid 要用 rpid_str 比，别用被丢精度的 number')
+    stub.state.bigRpid = false
+    stub.state.visibilityFails = true
+    eq(await isCommentVisible(cli, 123456, '555'), null, '读不到时必须回 null，别当成没发出去')
+  } finally { stub.restore() }
+})
+
+const WRITE_CFG = { ...DEFAULTS, keywords: ['测试'], perDay: 1, autoComment: true, mentionName: '冲浪助手' }
+
+await checkAsync('runRound 写闸门 dryRun=false：只真发一条、带 @、过 commentMax、复核可见性、台账记「评论」', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'bsr-write-'))
+  const stub = stubBili()
+  try {
+    saveCredential(dir, { sessdata: 'S', bili_jct: 'J', buvid3: 'B', dedeuserid: '42' })
+    const logs = []
+    const res = await runRound({
+      dir,
+      cfg: { ...WRITE_CFG, dryRun: false },
+      log: (m) => logs.push(m),
+      commentWriter: () => '这个视频讲得挺清楚，我也去试试',
+    })
+    ok(res.ok, 'runRound 要成功返回')
+    const posts = stub.posts()
+    eq(posts.length, 1, `一轮只许真发一条评论，实际 ${posts.length}`)
+    const msg = new URLSearchParams(posts[0].body).get('message')
+    ok(msg.startsWith('@冲浪助手'), `评论要自动补 @：${msg}`)
+    ok(msg.includes('讲得挺清楚'), `正文要原样带上：${msg}`)
+    ok(msg.length <= DEFAULTS.commentMax + 1, `正文要过 commentMax（${DEFAULTS.commentMax}）：${msg.length}`)
+    const seen = readText(join(dir, 'seen.md'))
+    ok(/\|\s*评论\s*\|/.test(seen), `台账备注要写「评论」：\n${seen}`)
+    ok(seen.includes('555'), '台账要记下 rpid（下一轮才不会重复评）')
+    const report = readText(join(dir, 'out', `${dayKey()}.md`))
+    ok(report.includes('本轮评论'), '报告里要有本轮评论')
+    ok(logs.some((l) => l.includes('已评论') && l.includes('可见性')), '日志要留下 rpid 与可见性')
+  } finally { stub.restore(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+await checkAsync('runRound 写闸门 dryRun=true：一个字节都不发出去，报告与台账都标「演练」', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'bsr-write-dry-'))
+  const stub = stubBili()
+  try {
+    saveCredential(dir, { sessdata: 'S', bili_jct: 'J', buvid3: 'B', dedeuserid: '42' })
+    await runRound({
+      dir,
+      cfg: { ...WRITE_CFG, dryRun: true },
+      log: () => {},
+      commentWriter: () => '演练用的正文',
+    })
+    eq(stub.posts().length, 0, 'dryRun 下不许有任何 /x/v2/reply/add')
+    const seen = readText(join(dir, 'seen.md'))
+    ok(seen.includes('演练（没真发）'), `台账要标演练：\n${seen}`)
+    ok(readText(join(dir, 'out', `${dayKey()}.md`)).includes('演练'), '报告里也要标明是演练')
+  } finally { stub.restore(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+await checkAsync('runRound 写闸门 autoComment=true 但没 @ 对象：根本不问助手要正文，也不发', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'bsr-write-noat-'))
+  const stub = stubBili()
+  let asked = 0
+  try {
+    saveCredential(dir, { sessdata: 'S', bili_jct: 'J', buvid3: 'B', dedeuserid: '42' })
+    const logs = []
+    await runRound({
+      dir,
+      cfg: { ...WRITE_CFG, mentionName: '', dryRun: false },
+      log: (m) => logs.push(m),
+      commentWriter: () => { asked += 1; return '不该被问到' },
+    })
+    eq(asked, 0, '没有 @ 对象时不许向助手要评论正文')
+    eq(stub.posts().length, 0, '没有 @ 对象时不许发评论')
+    ok(logs.some((l) => l.includes('mentionName 为空')), '要留一句日志说明为什么没发')
+  } finally { stub.restore(); rmSync(dir, { recursive: true, force: true }) }
 })
 
 /* ═════════════════════════════════════════════════════════════════ 汇总 */

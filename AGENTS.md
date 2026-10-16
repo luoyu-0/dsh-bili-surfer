@@ -18,10 +18,10 @@ lib/state.mjs       家目录、配置白名单化、JSON 读写、日期
 lib/surf.mjs        一轮编排（不碰 DSH）
 lib/report.mjs      报告与台账格式化（纯函数）
 prompts/surfer.md   冲浪章程（纪律/边界/评论文风/底线产出）
-selfcheck.mjs       离线预检（假 ctx + 假 DOM + 源码不变式）
+selfcheck.mjs       离线预检（假 ctx + 假 DOM + 源码不变式，含写路径打桩）
 selfcheck.live.mjs  联网冒烟（真打接口）
 selfcheck.round.mjs 联网跑一整轮（临时目录）
-selfcheck.host.mjs  对着活着的 dsh 进程验设置页契约（重启后跑）
+selfcheck.host.mjs  对着活着的 dsh 进程验契约（`--login` 顺带打一次扫码链，`--run` 真跑一轮）
 ```
 
 **命名必须统一为 `bili-surfer`**：插件 id、设置命名空间、状态目录名、客户端 slot id。参考实现 dsh-bili-scroll 在这三处有三个不同的名字（`bili-scroll`/`bili-duty`/`bili-duty`），设置页因此对不上 entry —— 别复制这个坑。
@@ -46,6 +46,7 @@ selfcheck.host.mjs  对着活着的 dsh 进程验设置页契约（重启后跑�
 16. **`dryRun` 是「真演练」，不是「跳过」。** 评论照样让助手写、照样过 `normalizeComment`、照样记进报告（**本轮评论**：演练）与台账（备注「演练（没真发）」），只压住最后那次 `sendComment`。如果 dryRun 直接跳过整段，设置页开了 `autoComment` 也看不出任何差别，用户就没法在不发帖的前提下验这条链。
 17. **扫码状态在 `data.data.code`，外层的 `code` 恒为 0。** passport 的 `x/passport-login/web/qrcode/poll` 回包是两层的：外层 `code:0` 只说「这次请求本身成功」，真正的扫码状态在内层 `data.code`（`86101` 未扫 / `86090` 已扫待确认 / `86038` 过期 / `0` 成功）。读外层就会**一按「生成二维码」就报登录成功**，而且此后每次读字幕/热评/发评论都静默降级成游客。踩过一次 —— 离线 stub 当时写的是错形状，62 项全绿也没拦住，是「对着活着的 dsh 打真实 passport」才抓到的。同一处还有第二个坑：`pickCredentials` 曾返回 `{}`（真值！），于是 `if (credentials)` 判定为「拿到凭证了」；现在没有 `sessdata` 一律返回 `undefined`，两处闸门都写成 `r.credentials?.sessdata`。
 18. **写 stub 之前先用真接口打一遍，把回包原样抄下来。** 尤其是「有没有 `code` 信封」这种一眼看不出的事（字幕正文那个接口就没有信封）。stub 的形状错了，整套自检会变成一场自我安慰。
+19. **比 rpid 一律用 `rpid_str`，别用 `rpid`。** 回包里 `rpid` 是 JSON number，而 rpid 是 int64 —— 大数会被 `JSON.parse` 丢精度（`9007199254740993` → `9007199254740992`），拿它比对就会「刚发的评论明明在列表里，却被判成不可见」。`lib/bili.mjs` 的 `sameRpid()` 优先取 `rpid_str`，两个分支共用；`sendComment` 的返回值也一样。
 
 ## B 站接口的真实行为（实测，别再踩）
 
@@ -98,3 +99,5 @@ selfcheck.host.mjs  对着活着的 dsh 进程验设置页契约（重启后跑�
 - [ ] 真正发出去的只有 `sendComment` 一处；`dryRun` 下永远不经过它
 - [ ] 新写文件都落在 `stateDir`（或预检脚本 `--dir` 指定的目录）里，不在插件包目录
 - [ ] **只有登录后才走得通的链条要有 stub fetch 的自检用例**（字幕链、发评论）：游客态验不了它们，靠人肉试就是等用户重启后才发现。形状照真响应造（尤其是「有没有 `code` 信封」这种一眼看不出的事）。
+- [ ] **写路径的三道闸都要有用例**（`selfcheck.mjs` E 段）：`autoComment` 关 / `mentionName` 空 / `dryRun` 开 —— 三种情况下 `POST /x/v2/reply/add` 的次数都必须是 0。
+- [ ] 重启后先跑 `node selfcheck.host.mjs --login`（只读 + 扫码链），再在设置页手点一遍；它失败的那些就是用户重启后第一眼会看到的问题。

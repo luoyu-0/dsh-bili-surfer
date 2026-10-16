@@ -1,6 +1,7 @@
 // 对着「正在跑的那个 DSH」验设置页契约 —— 和 selfcheck.live.mjs（打 B 站接口）不是一回事。
 //
 //   node selfcheck.host.mjs                 # 只读检查（默认）
+//   node selfcheck.host.mjs --login         # 外加真打一次扫码链（start → 逐格比对 → poll → logout）
 //   node selfcheck.host.mjs --run           # 外加拿一轮（会真写报告与台账）
 //   node selfcheck.host.mjs --port 19387
 //
@@ -20,6 +21,7 @@ const argOf = (name, dflt) => {
 const PORT = Number(argOf('--port', process.env.DSH_WEB_PORT || 19387))
 const BASE = `http://127.0.0.1:${PORT}/api/bili-surfer`
 const WITH_RUN = argv.includes('--run')
+const WITH_LOGIN = argv.includes('--login')
 
 const results = []
 const ok = (cond, msg) => results.push({ pass: Boolean(cond), msg })
@@ -38,7 +40,7 @@ async function req(path, { method = 'GET', body } = {}) {
   } catch {
     json = { __nonJson: text.slice(0, 200) }
   }
-  return { code: res.status, json }
+  return { code: res.status, json, text }
 }
 
 // 从 client.js 反推「设置页真正会读的顶层字段」（st.xxx）。
@@ -115,7 +117,43 @@ if (!st.login.pending) {
   console.log('  · 跳过 /login/poll 用例：你正开着一个扫码会话')
 }
 
-// 7) 可选：真跑一轮
+// 7) 可选：真打一次扫码链（不真登录——没有手机扫，轮询必须停在「未扫」）
+if (WITH_LOGIN) {
+  console.log('\n── 活着进程里的扫码链（--login）──')
+  const start = await req('/login/start', { method: 'POST', body: {} })
+  ok(start.code === 200 && start.json.ok === true, `POST /login/start 要成功（实际 HTTP ${start.code}）`)
+  const { key, url, size, rows } = start.json
+  ok(typeof url === 'string' && /^https:\/\//.test(url), `要给 https 扫码 URL（实际 ${JSON.stringify(url)}）`)
+  ok(typeof key === 'string' && key.length > 8, '要给 qrcode_key')
+  ok(Array.isArray(rows) && rows.length === size && size >= 21, `rows 要是 ${size}×${size} 的矩阵`)
+  ok(
+    (rows || []).every((r) => typeof r === 'string' && r.length === size && /^[01]+$/.test(r)),
+    '每行必须是等长 0/1 **字符串**（数字数组会让 canvas 全白）',
+  )
+  ok(!/sessdata|SESSDATA/i.test(start.text), '启动响应里不许出现凭证')
+  const { qrMatrix } = await import(new URL('./lib/qr.mjs', import.meta.url).href)
+  const m = qrMatrix(url)
+  eq(m.size, size, '矩阵尺寸要和插件自己算的一致')
+  let diff = 0
+  for (let y = 0; y < size; y += 1) {
+    if (m.modules[y].map((v) => (v ? '1' : '0')).join('') !== rows[y]) diff += 1
+  }
+  eq(diff, 0, '每一格都要相同（用户手机扫的就是这些像素）')
+
+  const poll = await req('/login/poll', { method: 'POST', body: { key } })
+  ok(poll.code === 200 && poll.json.ok === true, `POST /login/poll 要成功（实际 HTTP ${poll.code}）`)
+  ok(
+    poll.json.status !== 'ok',
+    `没人扫 → 绝不能说登录成功（实际 status=${JSON.stringify(poll.json.status)} text=${JSON.stringify(poll.json.text)}）`,
+  )
+  ok(!/sessdata|SESSDATA/i.test(poll.text), '轮询响应里也不许出现凭证')
+  console.log(`  · 真实回话：${JSON.stringify(poll.json)}`)
+
+  const out = await req('/logout', { method: 'POST', body: {} })
+  ok(out.code === 200 && out.json.ok === true, '收尾的 /logout 要成功')
+}
+
+// 8) 可选：真跑一轮
 if (WITH_RUN) {
   const run = await req('/run', { method: 'POST', body: {} })
   if (run.json.ok === false && run.json.busy) {
