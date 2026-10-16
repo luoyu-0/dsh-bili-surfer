@@ -459,6 +459,24 @@ check('renderReport：弹幕当摘录时不再和「弹幕在聊什么」逐行�
   eq(commentLine({ user: '甲', like: 0, message: '  多   空格  ' }), '甲（0 赞）：多 空格', '空白要压平')
 })
 
+check('renderReport：四个摘录来源都受 excerptChars 约束（含简介与弹幕）', () => {
+  const cfg = normalize({ excerptChars: 100 }, DEFAULTS)
+  const longDesc = { ...item, subtitle: null, aiSummary: null, danmakuText: '', desc: '啊'.repeat(5000) }
+  const md = renderReport({ day: '2026-03-02', cfg, items: [longDesc], stats: {}, generatedAt: new Date() })
+  ok(md.includes('（摘录到此，原文 5000 字）'), '截断要说明原文有多长')
+  ok(!md.includes('啊'.repeat(200)), '5000 字的简介不许整段进报告')
+  ok(md.length < 2000, `报告不该被一段简介淹掉（实际 ${md.length} 字符）`)
+
+  // 弹幕那条路也一样（以前只有字幕被截过）
+  const cfg2 = normalize({ excerptChars: 60 }, DEFAULTS)
+  const longDm = { ...item, subtitle: null, aiSummary: null, desc: '', danmakuText: '哈'.repeat(3000), danmakuSample: ['哈'] }
+  const md2 = renderReport({ day: '2026-03-02', cfg: cfg2, items: [longDm], stats: {}, generatedAt: new Date() })
+  ok(md2.includes('（摘录到此，原文 3000 字）'), '弹幕摘录也要截')
+  // 短内容不该被加尾巴
+  const md3 = renderReport({ day: '2026-03-02', cfg, items: [item], stats: {}, generatedAt: new Date() })
+  ok(!md3.includes('摘录到此'), '没超上限就不要动它')
+})
+
 check('评论：演练（dryRun）在报告与台账里都标明「没真发」，真发的行带 rpid', () => {
   const cfg = normalize({ autoComment: true, mentionName: '小明' }, DEFAULTS)
   const dry = { ...item, mentioned: '小明', comment: { rpid: null, dryRun: true, message: '@小明 说得好' } }
