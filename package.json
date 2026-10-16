@@ -1,0 +1,41 @@
+{
+  "name": "dsh-bili-surfer",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness 插件：自主刷 B 站 —— 搜索/读内容/写报告，可选自动评论并 @ 你。纯 JS，零安装。",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "lib",
+    "prompts",
+    "README.md",
+    "AGENTS.md",
+    "LICENSE"
+  ],
+  "//engines": "故意不写 engines.dsh —— 它是硬门槛：版本不满足时插件既不安装也不激活，只剩一句 '1 entry did not activate'。本插件没有 peerDependencies，不写这条就没有任何东西能挡住它激活。参考实现写了 >=0.1.7-rc.1，在版本不够的机器上就是静默失效。",
+  "engines": {
+    "node": ">=22"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-settings-plugins"
+      ]
+    }
+  },
+  "license": "MIT",
+  "private": true
+}

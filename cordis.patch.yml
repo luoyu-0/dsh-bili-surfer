@@ -1,0 +1,13 @@
+# dsh-bili-surfer 作为 bundle 插入 profile 配置树。
+#
+# 分层规则：每个 bundle 的 patch 按 dsh.profile.bundles 的顺序叠加，profile 自己的
+# cordis.patch.yml 叠在最上面；**只有 profile 那一层会被热重载** —— 所以本插件改完
+# 必须重启 dsh 才生效。
+#
+# id 必须和设置命名空间、状态目录名一致（都叫 bili-surfer），否则设置页会
+# 找不到对应的 entry。
+- insert:
+    - id: bili-surfer
+      name: dsh-bili-surfer
+      config:
+        enabled: true
