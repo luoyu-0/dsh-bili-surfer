@@ -219,7 +219,11 @@ window.__ModuleLoader__.load({
           dirtyRef.current = false
           setDirty(false)
           setDraft(r.config || {})
-          setMsg('已保存（立刻生效，不用重启）')
+          // 说清楚「改了什么 / 有没有白改」：空保存、以及被白名单丢掉的键，都要看得见。
+          const ch = r.changed || []
+          const ig = r.ignored || []
+          const what = ch.length ? `（${ch.join('、')}）` : '（没有改动）'
+          setMsg(ig.length ? `已保存${what}；${ig.join('、')} 不在白名单里，没生效` : `已保存${what}，立刻生效，不用重启`)
         } else setMsg(`保存失败：${r.error}`)
       }
 

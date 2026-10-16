@@ -1056,9 +1056,21 @@ async function hostTests() {
     eq(json.config.keywords.join(','), '测试')
     eq(json.config.source, 'search', '非法枚举要回退')
     eq(json.config.evil, undefined, '不认识的字段不许写进配置')
+    ok(json.changed.includes('perDay') && json.changed.includes('keywords'), `changed 要列出真变了的键：${JSON.stringify(json.changed)}`)
+    ok(!json.changed.includes('source'), '枚举非法、回退成原值时，source 不算改动')
+    ok(json.ignored.includes('evil'), '白名单丢掉的键要说出来（不然用户以为写进去了）')
     const again = await call('GET', '/api/bili-surfer/status')
     eq(again.json.config.perDay, 3, '落盘了没有')
     ok(readFileSync(join(home, 'bili-surfer', 'config.json'), 'utf8').includes('"perDay": 3'), 'config.json 内容')
+    // 空 patch（设置页什么都没改就点保存）不该在 surf.log 里留一行：一次探针 POST 就能刷出几十行
+    // 「设置页改了配置：{}」（真实发生过，把真日志刷成了噪声）。
+    const logPath = join(home, 'bili-surfer', 'surf.log')
+    const count = () => (readText(logPath).match(/设置页改了配置/g) || []).length
+    const n0 = count()
+    const empty = await call('POST', '/api/bili-surfer/config', { patch: {} })
+    eq(empty.json.changed.length, 0, '空 patch 的 changed 必须是空数组')
+    eq(empty.json.ignored.length, 0, '空 patch 的 ignored 也必须是空数组')
+    eq(count(), n0, '空 patch 不许往 surf.log 里写「设置页改了配置」')
   })
 
   await checkAsync('POST /login/poll 在没有会话时是软失败（不是 500）', async () => {
@@ -1578,12 +1590,28 @@ await checkAsync('设置页输入框：列表分隔符打得进去；清空数�
   eq(pick(out, numSel).props.value, '', '清空就是空着，别自作主张变 0')
 
   const saveBtn = out.clickables.find((c) => c.label.startsWith('保存设置'))
+  // 保存后要说清「改了什么 / 有没有白改」：空保存、被白名单丢掉的键，都要看得见。
+  clientEnv.routes['/api/bili-surfer/config'] = { ok: true, changed: ['perDay', 'keywords'], ignored: ['evil'], config: { keywords: ['DeepSeek', 'Harness', '插件'], perDay: 5 } }
   await saveBtn.onClick()
+  out = await renderSettled()
+  ok(out.text.includes('perDay'), `保存提示要点出改动的键：${out.text.replace(/\n/g, ' ⏎ ').slice(0, 220)}`)
+  ok(out.text.includes('evil'), '被白名单丢掉的键要在提示里点名')
   const posts = clientEnv.fetched.filter((f) => f.method === 'POST' && f.url === '/api/bili-surfer/config')
   ok(posts.length > 0, '点保存要发 POST /config')
   const patch = posts[posts.length - 1].body.patch
   eq(patch.perDay, 5, '清空数字框不许把条数改成下限')
   eq(JSON.stringify(patch.keywords), JSON.stringify(['DeepSeek', 'Harness', '插件']), '关键词照样按分隔符切')
+
+  // 什么都没改（把数字重新打一遍同样的值，dirty 变 true 但 changed 为空）→ 提示要说「没有改动」
+  clientEnv.routes['/api/bili-surfer/config'] = { ok: true, changed: [], ignored: [], config: { keywords: ['DeepSeek', 'Harness', '插件'], perDay: 5 } }
+  out = await renderSettled()
+  await pick(out, numSel).props.onChange({ target: { value: '5' } })
+  out = await renderSettled()
+  const again = out.clickables.find((c) => c.label.startsWith('保存设置'))
+  ok(again, '重新打过一遍值之后，保存按钮要能点')
+  await again.onClick()
+  out = await renderSettled()
+  ok(out.text.includes('没有改动'), `空保存要说「没有改动」：${out.text.replace(/\n/g, ' ⏎ ').slice(0, 220)}`)
 })
 
 /* ═══════════════════════════════════════════════════ D. 源码不变式 */

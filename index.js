@@ -536,9 +536,15 @@ export function apply(ctx, config) {
       return sendJson(res, 200, { ok: true, path: p.seenFile, total: countSeen(readText(p.seenFile)), text: all.slice(-120).join('\n') })
     }
     if (POST && path === '/config') {
+      const before = publicCfg()
       const next = saveCfg(body.patch || body)
-      log(`设置页改了配置：${JSON.stringify(body.patch || body)}`)
-      return sendJson(res, 200, { ok: true, config: next })
+      // 只说**真变了**的键。空 patch（设置页保存时什么都没改）不该在 surf.log 里留一行：
+      // 每 5 秒轮询的那条路不会走到这里，但「点保存」和一次失败的探针都会。
+      const changed = Object.keys(next).filter((k) => JSON.stringify(next[k]) !== JSON.stringify(before[k]))
+      const ignored = Object.keys(body.patch || body || {}).filter((k) => !(k in next))
+      if (changed.length) log(`设置页改了配置：${changed.join('、')}`)
+      else if (ignored.length) log(`设置页改了配置：${ignored.join('、')} 不在白名单里（没有生效）`)
+      return sendJson(res, 200, { ok: true, changed, ignored, config: next })
     }
     if (POST && path === '/run') {
       releaseStale()
