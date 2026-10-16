@@ -744,6 +744,12 @@ async function hostTests() {
     eq(json.running, false)
     ok(Array.isArray(json.fields) && json.fields.length >= 14, '字段表要够全')
     ok(json.fields.some((f) => f.key === 'autoComment'), '必须有 autoComment')
+    // 设置页是照 fields 渲染的：config 里有、fields 里没有的项＝用户永远看不到那个开关；
+    // 反过来 fields 有、config 没有＝控件显示 undefined。两边必须逐键对齐。
+    const cfgKeys = Object.keys(json.config).sort().join(',')
+    const fldKeys = json.fields.map((f) => f.key).sort().join(',')
+    eq(cfgKeys, fldKeys, `config 与 fields 的键必须一一对应（config=${cfgKeys} / fields=${fldKeys}）`)
+    ok(json.fields.every((f) => f.key && f.type && f.label), '每个字段都要有 key/type/label')
     eq(json.config.autoComment, false, '自动评论默认关')
     eq(json.config.dryRun, true, '演练模式默认开')
     ok(typeof json.home === 'string' && json.home.startsWith(home), json.home)

@@ -1,0 +1,149 @@
+// 对着「正在跑的那个 DSH」验设置页契约 —— 和 selfcheck.live.mjs（打 B 站接口）不是一回事。
+//
+//   node selfcheck.host.mjs                 # 只读检查（默认）
+//   node selfcheck.host.mjs --run           # 外加拿一轮（会真写报告与台账）
+//   node selfcheck.host.mjs --port 19387
+//
+// 为什么要有这个：设置页脚本 client.js 只认识 /status 里的几个字段，而插件的路由
+// 只有「重启 dsh 后」才会换成新代码（模块缓存）—— 于是最容易出现的失效是
+// 「用户重启前看到的旧契约」和「我改完的源码」对不上，而两边各自都「看不出问题」。
+// 这里把 client.js 真正读的字段从源码里反推出来，再逐个到活的 /status 里对账。
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
+const ROOT = fileURLToPath(new URL('.', import.meta.url))
+const argv = process.argv.slice(2)
+const argOf = (name, dflt) => {
+  const i = argv.indexOf(name)
+  return i >= 0 && argv[i + 1] ? argv[i + 1] : dflt
+}
+const PORT = Number(argOf('--port', process.env.DSH_WEB_PORT || 19387))
+const BASE = `http://127.0.0.1:${PORT}/api/bili-surfer`
+const WITH_RUN = argv.includes('--run')
+
+const results = []
+const ok = (cond, msg) => results.push({ pass: Boolean(cond), msg })
+const eq = (got, want, msg) => ok(got === want, `${msg ?? ''}（期望 ${JSON.stringify(want)}，实际 ${JSON.stringify(got)}）`)
+
+async function req(path, { method = 'GET', body } = {}) {
+  const res = await fetch(BASE + path, {
+    method,
+    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  })
+  const text = await res.text()
+  let json
+  try {
+    json = JSON.parse(text)
+  } catch {
+    json = { __nonJson: text.slice(0, 200) }
+  }
+  return { code: res.status, json }
+}
+
+// 从 client.js 反推「设置页真正会读的顶层字段」（st.xxx）。
+function panelFields() {
+  const src = readFileSync(ROOT + 'client.js', 'utf8')
+  const keys = new Set()
+  for (const m of src.matchAll(/\bst\.([A-Za-z_$][\w$]*)/g)) keys.add(m[1])
+  // error 是面板自己包出来的（api() 的失败分支），不是 /status 给的
+  keys.delete('error')
+  // 这两个只在「正在跑」时才有：由 runningInfo() 决定
+  const conditional = new Set(['seconds', 'startedAt'])
+  return { required: [...keys].filter((k) => !conditional.has(k)).sort(), conditional: [...keys].filter((k) => conditional.has(k)).sort() }
+}
+
+console.log(`\n── 活着的 DSH 上的 bili-surfer 契约（${BASE}）${'─'.repeat(12)}`)
+
+// 1) 插件在不在
+let st
+try {
+  const r = await req('/status')
+  st = r.json
+  ok(r.code === 200 && st?.ok === true, `GET /status 要 200 且 ok:true（实际 HTTP ${r.code}${st?.__nonJson ? `，返回的不是 JSON：${st.__nonJson}` : ''}）`)
+  if (!(r.code === 200 && st?.ok === true)) {
+    console.log('\n✗ 拿不到 /status：插件没挂在这个进程上。')
+    console.log('  常见原因：profile 里没列 bundle / 包没装 / 改完代码没重启 dsh（模块缓存）。')
+    process.exit(1)
+  }
+} catch (e) {
+  console.log(`\n✗ 连不上 http://127.0.0.1:${PORT}：${e?.message || e}`)
+  console.log('  DSH 没在跑，或者端口不对（用 --port 指定）。')
+  process.exit(1)
+}
+
+// 2) 设置页读的字段一个都不能少（client.js ↔ /status 对账）
+const { required, conditional } = panelFields()
+for (const k of required) ok(k in st, `设置页要读 st.${k}，/status 必须给`)
+for (const k of conditional) ok(!st.running || k in st, `正在跑的时候 st.${k} 必须给（client.js 会渲染它）`)
+
+// 3) 契约细节
+eq(typeof st.enabled, 'boolean', 'st.enabled 必须是布尔（false/undefined 会让徽标永远显示「已停用」）')
+eq(st.enabled, st.config?.enabled, 'config.enabled 与顶层 enabled 要一致')
+ok(typeof st.version === 'string' && st.version.length > 0, 'st.version 要有值')
+ok(Array.isArray(st.fields) && st.fields.length >= 10, `st.fields 要是一张够全的表（实际 ${st.fields?.length}）`)
+ok((st.fields || []).every((f) => f.key && f.type && f.label), '每个字段都要有 key/type/label')
+const cfgKeys = Object.keys(st.config || {}).sort().join(',')
+const fldKeys = (st.fields || []).map((f) => f.key).sort().join(',')
+eq(cfgKeys, fldKeys, 'config 与 fields 的键必须逐一对齐（少了＝那个开关在设置页看不见）')
+ok(typeof st.home === 'string' && st.home.length > 0, `st.home 要指向状态目录（实际 ${JSON.stringify(st.home)}）`)
+ok(typeof st.logTail === 'string', 'st.logTail 要是字符串')
+ok(st.login && typeof st.login === 'object', 'st.login 要给个对象（哪怕只是 {pending:false}）')
+
+// 4) 其余只读路由
+const rep = await req('/report')
+ok(rep.code === 200 && rep.json.ok === true, `GET /report 要 200（实际 ${rep.code}）`)
+ok(typeof rep.json.text === 'string' && Array.isArray(rep.json.reports), '报告路由要回 text 与 reports[]')
+const seen = await req('/seen')
+ok(seen.code === 200 && seen.json.ok === true && typeof seen.json.text === 'string', `GET /seen 要回台账文本（实际 ${seen.code}）`)
+const nope = await req('/nope')
+eq(nope.code, 404, '未知路径要 404')
+ok(nope.json.ok === false, '404 也要是 JSON 而且 ok:false')
+
+// 5) 无副作用的一次 POST：空 patch 不该改任何东西
+const before = JSON.stringify(st.config)
+const cfg = await req('/config', { method: 'POST', body: { patch: {} } })
+ok(cfg.code === 200 && cfg.json.ok === true, `POST /config 空 patch 要成功（实际 ${cfg.code}）`)
+eq(JSON.stringify(cfg.json.config), before, '空 patch 不许改动配置')
+
+// 6) 没有扫码会话时，poll 要是软失败（不是 500）
+if (!st.login.pending) {
+  const poll = await req('/login/poll', { method: 'POST', body: {} })
+  ok(poll.code === 200 && poll.json.ok === false, `没有会话时 /login/poll 要软失败（实际 HTTP ${poll.code}）`)
+  ok(/扫码/.test(String(poll.json.error || '')), `失败原因要说人话（实际 ${JSON.stringify(poll.json.error)}）`)
+} else {
+  console.log('  · 跳过 /login/poll 用例：你正开着一个扫码会话')
+}
+
+// 7) 可选：真跑一轮
+if (WITH_RUN) {
+  const run = await req('/run', { method: 'POST', body: {} })
+  if (run.json.ok === false && run.json.busy) {
+    console.log('  · 已经有一轮在跑，等它跑完')
+  } else {
+    ok(run.json.ok === true && run.json.started === true, `POST /run 要么 started，要么 busy（实际 ${JSON.stringify(run.json)}）`)
+    const t0 = Date.now()
+    let last = ''
+    while (Date.now() - t0 < 180000) {
+      await new Promise((r) => setTimeout(r, 2000))
+      const s = await req('/status')
+      last = s.json.logTail || ''
+      if (!s.json.running) break
+    }
+    const s = await req('/status')
+    ok(!s.json.running, '一轮要在 180 秒内结束')
+    const rep2 = await req('/report')
+    ok(rep2.json.text.length > 0, '跑完要能在 /report 里读到今天的日报')
+    console.log(`  · 本轮日志尾部：\n${(last.split('\n').slice(-6).join('\n'))}`)
+  }
+}
+
+const bad = results.filter((r) => !r.pass)
+for (const r of results) console.log(`${r.pass ? '  ✓' : '  ✗'} ${r.msg}`)
+console.log('─'.repeat(64))
+console.log(`共 ${results.length} 项，通过 ${results.length - bad.length}${bad.length ? `，失败 ${bad.length}` : ''}`)
+if (bad.length) {
+  console.log('\n✗ 上面失败的那些就是重启后第一眼会看到的问题，按提示改源码再重启。')
+  process.exit(1)
+}
+console.log('✓ 活着的 DSH 上的契约与源码一致')

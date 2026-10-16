@@ -21,6 +21,7 @@ prompts/surfer.md   冲浪章程（纪律/边界/评论文风/底线产出）
 selfcheck.mjs       离线预检（假 ctx + 假 DOM + 源码不变式）
 selfcheck.live.mjs  联网冒烟（真打接口）
 selfcheck.round.mjs 联网跑一整轮（临时目录）
+selfcheck.host.mjs  对着活着的 dsh 进程验设置页契约（重启后跑）
 ```
 
 **命名必须统一为 `bili-surfer`**：插件 id、设置命名空间、状态目录名、客户端 slot id。参考实现 dsh-bili-scroll 在这三处有三个不同的名字（`bili-scroll`/`bili-duty`/`bili-duty`），设置页因此对不上 entry —— 别复制这个坑。
