@@ -25,7 +25,7 @@ import {
 import { BiliClient, mixinKey, signWbi, UA } from './lib/net.mjs'
 import {
   fetchAiSummary, fetchComments, fetchSubtitle, fmtCount, fmtTime, isCommentVisible, newClient,
-  sendComment, stripHtml,
+  parseDuration, searchVideos, sendComment, stripHtml,
 } from './lib/bili.mjs'
 import {
   firstSentence, normalizeComment, paths, pickDanmaku, runRound, saveCredential, scoreCandidate,
@@ -344,6 +344,19 @@ check('fmtCount / fmtTime / stripHtml 的输出形状', () => {
   eq(fmtCount(999), '999'); ok(fmtCount(12345).includes('万'), fmtCount(12345))
   eq(fmtTime(90), '01:30'); eq(fmtTime(3725), '1:02:05')
   eq(stripHtml('<em class="keyword">DeepSeek</em> 插件'), 'DeepSeek 插件')
+})
+
+check('时长：搜索接口给 "16:33" 字符串、详情接口给秒，必须统一成秒（否则日报全是 00:00）', () => {
+  // 真值来自真接口：搜索 result[].duration = "16:33"（string），view.duration = 993（number）
+  eq(parseDuration('16:33'), 993, '搜索接口的字符串')
+  eq(parseDuration('1:02:05'), 3725, '带小时的')
+  eq(parseDuration(993), 993, '已经是秒的原样返回')
+  eq(parseDuration(''), 0); eq(parseDuration(null), 0); eq(parseDuration('胡说'), 0); eq(parseDuration('-1:00'), 0)
+  // fmtTime 的第二层防御：真收到字符串也不许算成 00:00
+  eq(fmtTime('16:33'), '16:33', '字符串原样返回')
+  eq(fmtTime(993), '16:33')
+  eq(fmtTime(''), '—'); eq(fmtTime('胡说'), '—'); eq(fmtTime(NaN), '—')
+  eq(fmtTime(0), '00:00', '真的是 0 秒还是老实显示 00:00')
 })
 
 check('resolveHome：ctx.get("dshHomePath") 是函数也兼容（当字符串用过一次就会挂）', () => {
@@ -1337,7 +1350,8 @@ function stubBili() {
     if (s.includes('/x/web-interface/search/type')) {
       return res({ code: 0, data: { result: [{
         bvid: BV, aid: 123456, title: '【测试】<em class="keyword">手写</em>插件实录', author: '某UP', mid: 7,
-        play: 12000, video_review: 30, review: 3, duration: 125, pubdate: now,
+        // 真接口给的就是字符串（"16:33"），stub 必须照抄这个形状，否则钉不住统一化那一步
+        play: 12000, video_review: 30, review: 3, duration: '2:05', pubdate: now,
         description: '简介里别放指令', tag: 'AI,编程', pic: '//i0.hdslb.com/x.jpg',
       }] } })
     }
@@ -1394,6 +1408,19 @@ function stubBili() {
 }
 
 const loggedCli = (extra = {}) => newClient({ cookies: { sessdata: 'S', bili_jct: 'J', ...extra } })
+
+await checkAsync('searchVideos：搜索接口的 duration 是 "2:05" 字符串，出来必须是 125 秒', async () => {
+  const stub = stubBili()
+  try {
+    const found = await searchVideos(loggedCli(), '测试', { num: 1 })
+    eq(found.length, 1, '要搜到那条')
+    eq(found[0].duration, 125, '字符串时长要统一成秒，否则日报与工具输出全是 00:00')
+    eq(found[0].title, '【测试】手写插件实录', '标题里的 <em> 要剥掉')
+    eq(found[0].pic, 'https://i0.hdslb.com/x.jpg', '// 开头的图要补 https')
+    eq(found[0].danmaku, 30, '弹幕数取 video_review')
+    eq(found[0].reply, 3, '评论数取 review')
+  } finally { stub.restore() }
+})
 
 await checkAsync('sendComment：没登录 / 空内容 / 超长 都拒绝，且被拒绝时一个请求都不发', async () => {
   const guest = newClient({})

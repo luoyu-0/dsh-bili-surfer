@@ -17,6 +17,12 @@ ok('buvid3', Boolean(cli.cookies.buvid3))
 
 const found = await searchVideos(cli, kw, { num: 6, order: 'totalrank' })
 ok('searchVideos', found.length > 0, `${found.length} 条，首条=${found[0]?.title?.slice(0, 30)}`)
+// 搜索接口的 duration 是 "16:33" 字符串，映射后必须是**秒**，否则日报与工具输出全是 00:00
+ok(
+  'searchVideos.duration 已统一成秒',
+  found.every((x) => typeof x.duration === 'number' && Number.isFinite(x.duration)),
+  `前三条=${found.slice(0, 3).map((x) => `${x.bvid}:${x.duration}s→${fmtTime(x.duration)}`).join(' ')}`,
+)
 
 let v = found[0]
 if (process.argv[3]) {
@@ -25,6 +31,7 @@ if (process.argv[3]) {
   v = await videoInfo(cli, v.bvid)
 }
 ok('videoInfo', Boolean(v.cid), `${v.bvid} cid=${v.cid} 时长=${fmtTime(v.duration)} 播放=${fmtCount(v.stat.view)}`)
+ok('详情接口的 duration 是秒且与格式化自洽', typeof v.duration === 'number' && v.duration > 0 && fmtTime(v.duration) !== '00:00', `${v.duration}s → ${fmtTime(v.duration)}`)
 
 const sub = await fetchSubtitle(cli, v.bvid, v.cid)
 console.log(`INFO  subtitle: ${sub ? `${sub.lan} ${sub.lines.length} 行` : 'null（无字幕或未登录）'}`)

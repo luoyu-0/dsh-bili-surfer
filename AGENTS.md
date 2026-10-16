@@ -71,6 +71,7 @@ selfcheck.host.mjs  对着活着的 dsh 进程验契约（`--login` 顺带打一
 - **字幕正文那个 URL（`aisubtitle.hdslb.com/...json`）返回的是裸 JSON**：`{"body":[{from,to,location,content}]}`，**没有 `code`/`message` 信封**。所以它不能走 `getJson()`（那条路按 `code===0` 判定，`undefined !== 0` 会直接抛），要像弹幕 XML 一样用 `cli.raw()` + `res.text()` + `JSON.parse`。踩过一次：登录后**每一条视频的字幕都会「失败」**，而日志只会写一句 `字幕失败：undefined @ https://…`，很容易被当成「这个视频没字幕」。判定用 `Array.isArray(body?.body) ? body.body : body?.data?.body`（留一个信封的余地）。
 - **字幕这条链的形状已用独立实现对照过**（我是游客，拿不到真回包，属于「只能靠抄」的东西）：参考实现内置的 `bilibili-mcp` 是同一套字段 —— `D:\everything\dsh\_ref\dsh-bili-scroll\vendor\bilibili-mcp\mcp_server.py:364-390` 读 `subtitle_list["subtitles"]`、`s["lan"]`/`s["lan_doc"]`/`s["subtitle_url"]`，`//` 开头补 `https:`，`sub_data["body"]` 里逐条取 `content`。它也**不带 Referer** 就能下（我们的 Referer 是多余但无害的保险）。
 - **cookie 只发给 `*.bilibili.com`**：字幕正文在 `*.hdslb.com` 上，浏览器也不会把 b 站 cookie 发过去，`raw()` 里按 host 判断（凭证少外发一个域是一个域）。要断言这件事，`selfcheck.mjs` 的「字幕链」用例里有 `ok(!cdn.cookie, …)`。
+- **时长的形状两个接口不一样**：搜索 `result[].duration` 是**字符串 `"16:33"`**，而 `/x/web-interface/view`、`popular`、`rcmd` 给的是**秒**（993）。`parseDuration()` 统一成秒，`searchVideos`/`popular`/`recommend` 三处都过一遍；`fmtTime` 再加一层容忍（字符串 `"16:33"` 原样返回、垃圾输入回 `—`、真 0 秒老实显示 `00:00`）。踩过一次：**所有搜索出来的条目时长都显示 `00:00`** —— 离线用例当时只校验了内部函数，是**真去调用工具**（`bili_surf_search`）才看出来的。
 - 弹幕 90% 是「哈哈哈哈」和复读，`pickDanmaku()` 会先挑长且不重复的。
 
 ## 二维码是怎么验的（三层，别只信第一层）
@@ -102,3 +103,4 @@ selfcheck.host.mjs  对着活着的 dsh 进程验契约（`--login` 顺带打一
 - [ ] **只有登录后才走得通的链条要有 stub fetch 的自检用例**（字幕链、发评论）：游客态验不了它们，靠人肉试就是等用户重启后才发现。形状照真响应造（尤其是「有没有 `code` 信封」这种一眼看不出的事）。
 - [ ] **写路径的三道闸都要有用例**（`selfcheck.mjs` E 段）：`autoComment` 关 / `mentionName` 空 / `dryRun` 开 —— 三种情况下 `POST /x/v2/reply/add` 的次数都必须是 0。
 - [ ] 重启后先跑 `node selfcheck.host.mjs --login`（只读 + 扫码链），再在设置页手点一遍；它失败的那些就是用户重启后第一眼会看到的问题。
+- [ ] **真去调用一次工具**（`bili_surf_status` / `bili_surf_search` / `bili_surf_read` / `bili_surf_report`），别只信离线用例：踩过一次 —— 搜索条目时长全显示 `00:00`，离线 68 项全绿也没拦住，是调 `bili_surf_search` 才看见的（内部函数测得再细，也可能和「真正展示出去的那几个字段」差一层）。
