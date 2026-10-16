@@ -12,6 +12,8 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
+import { buildStamp } from './lib/state.mjs'
+
 const ROOT = fileURLToPath(new URL('.', import.meta.url))
 const argv = process.argv.slice(2)
 const argOf = (name, dflt) => {
@@ -83,6 +85,15 @@ for (const k of conditional) ok(!st.running || k in st, `正在跑的时候 st.$
 eq(typeof st.enabled, 'boolean', 'st.enabled 必须是布尔（false/undefined 会让徽标永远显示「已停用」）')
 eq(st.enabled, st.config?.enabled, 'config.enabled 与顶层 enabled 要一致')
 ok(typeof st.version === 'string' && st.version.length > 0, 'st.version 要有值')
+// 指纹对不上 = 这个进程里跑的不是磁盘上这份代码（dsh 会热挂 bundle，但 Node 模块缓存不会跟着文件变）
+{
+  const disk = buildStamp(ROOT)
+  ok(
+    disk && st.build === disk,
+    `跑的是不是磁盘上这份代码：活的 build=${JSON.stringify(st.build)}，磁盘 ${JSON.stringify(disk)}` +
+      (st.build === undefined ? ' —— 旧构建连 build 字段都没有，重启 dsh' : ' —— 不一致：改完代码要重启 dsh'),
+  )
+}
 ok(Array.isArray(st.fields) && st.fields.length >= 10, `st.fields 要是一张够全的表（实际 ${st.fields?.length}）`)
 ok((st.fields || []).every((f) => f.key && f.type && f.label), '每个字段都要有 key/type/label')
 const cfgKeys = Object.keys(st.config || {}).sort().join(',')

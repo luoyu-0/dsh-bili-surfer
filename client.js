@@ -257,6 +257,7 @@ window.__ModuleLoader__.load({
             h('b', null, '今天'), h('span', null, `${st.runsToday || 0} 轮 · 台账共 ${st.seenRows || 0} 条`),
             h('b', null, '家目录'), h('span', { className: 'bsf-mono' }, st.home || ''),
             h('b', null, '最近报告'), h('span', { className: 'bsf-mono' }, st.lastReport || '（还没有）'),
+            h('b', null, '构建'), h('span', { className: 'bsf-mono' }, st.build || '旧构建（没有 build 字段，重启 dsh）'),
           ),
           h('div', { className: 'bsf-row', style: { marginTop: '12px' } },
             h('button', { className: 'bsf-btn bsf-primary', disabled: running || busy === 'run', onClick: run }, running ? '正在跑…' : '▶ 刷一轮'),

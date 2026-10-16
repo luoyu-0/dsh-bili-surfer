@@ -23,7 +23,7 @@ import { makeToolRegistrar } from './lib/tools.mjs'
 import { qrMatrix } from './lib/qr.mjs'
 import {
   DEFAULTS, HOME_SUBDIR, ORDERS, PLUGIN_ID, REPORT_LEVELS, SOURCES,
-  appendLog, dayKey, ensureFiles, fmtAge, mtime, normalize, readJson, readText,
+  appendLog, buildStamp, dayKey, ensureFiles, fmtAge, mtime, normalize, readJson, readText,
   tail, writeJson, writeText, stateDirOf,
 } from './lib/state.mjs'
 import {
@@ -69,6 +69,9 @@ export function apply(ctx, config) {
   try {
     pkgVersion = String(JSON.parse(readFileSync(join(pluginDir, 'package.json'), 'utf8')).version || version)
   } catch { /* 读不到就用常量 */ }
+
+  // 加载时的源码指纹：/status 会带上它，跟磁盘上现算的比一比就知道跑的是不是最新代码
+  const build = buildStamp(pluginDir)
 
   const log = (msg) => {
     const line = `${new Date().toISOString()}  ${msg}`
@@ -474,6 +477,7 @@ export function apply(ctx, config) {
       return sendJson(res, 200, {
         ok: true,
         version: pkgVersion,
+        build, // 8 位源码指纹；与磁盘上现算的不一致 = 跑的是旧构建（热挂过，得重启 dsh）
         home: stateDir,
         enabled: cfg.enabled, // 设置页的「已启用/已停用」标签读的是顶层 enabled，别只给 config.enabled
         config: publicCfg(),

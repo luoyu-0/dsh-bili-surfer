@@ -779,6 +779,7 @@ async function hostTests() {
     eq(json.ok, true)
     eq(json.config.enabled, true, '默认启用')
     eq(json.enabled, true, '设置页顶部标签读的是顶层 enabled，不能只给 config.enabled')
+    ok(/^[0-9a-f]{8}$/.test(String(json.build || '')), `st.build 要是 8 位源码指纹（实际 ${JSON.stringify(json.build)}）—— 旧构建没有它，正好用来分辨「跑的是新代码还是热挂的旧代码」`)
     eq(json.running, false)
     ok(Array.isArray(json.fields) && json.fields.length >= 14, '字段表要够全')
     ok(json.fields.some((f) => f.key === 'autoComment'), '必须有 autoComment')

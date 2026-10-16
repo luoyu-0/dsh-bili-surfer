@@ -96,7 +96,8 @@ node selfcheck.host.mjs   # 对着**正在跑的** dsh 验设置页契约（重�
 
 ⚠️ **改完代码必须重启 dsh。** bundle 的 patch 只在启动时读；profile 变化时 DSH 会热挂
 新 bundle（所以「设置页出现了刷B站」不等于「跑的是你刚改的代码」——Node 的模块缓存不会
-跟着文件走）。判断依据：`node selfcheck.host.mjs` 的第一条就会告诉你了。
+跟着文件走）。判断依据有两个：`node selfcheck.host.mjs` 第一条会明说；设置页「构建」那一行
+显示的是**加载时**算出来的源码指纹（`/status` 的 `build`），和磁盘上现算的对不上就是旧构建。
 
 `lib/` 分层：
 
