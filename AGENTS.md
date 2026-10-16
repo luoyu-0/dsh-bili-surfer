@@ -41,6 +41,8 @@ selfcheck.round.mjs 联网跑一整轮（临时目录）
 12. **`saveCredential(dir, null)` 是删文件，不是写一个 `null`。** 退出登录要真把 cookie 从盘上抹掉。
 13. **别在轮询路由里直连网络。** 设置页每 5 秒打一次 `GET /status`，而 `/status` 要显示登录名 → `whoami` 必须带 TTL 缓存（`index.js` 的 `ME_TTL = 60_000` + `forgetMe()`，登录/退出时作废）。否则用户开着设置页就等于每分钟打 12 次 B 站。
 14. **设置页读的是 `/status` 的顶层字段**（`st.enabled`、`st.config`、`st.logTail`、`st.login`…）。开关只放进 `config.enabled` 会让徽标永远显示「已停用」——两处都要有。
+15. **测试脚本不许把运行时状态写进仓库。** `selfcheck.round.mjs` 的 `--dir` 为空（shell 把 `--dir=X` 拆成 `--dir=` + X 时就会）或指向插件包目录时**直接拒绝**；`.gitignore` 覆盖 `out/ seen.md state.json surf.log config.json credential.json`。踩过一次：空 `--dir` 让一轮的 `out/`、`seen.md` 落进仓库，被 `git add -A` 顺手提交了。
+16. **`dryRun` 是「真演练」，不是「跳过」。** 评论照样让助手写、照样过 `normalizeComment`、照样记进报告（**本轮评论**：演练）与台账（备注「演练（没真发）」），只压住最后那次 `sendComment`。如果 dryRun 直接跳过整段，设置页开了 `autoComment` 也看不出任何差别，用户就没法在不发帖的前提下验这条链。
 
 ## B 站接口的真实行为（实测，别再踩）
 
@@ -88,3 +90,5 @@ selfcheck.round.mjs 联网跑一整轮（临时目录）
 - [ ] 没有 setInterval / setTimeout 常驻定时器
 - [ ] 新增的落盘路径都在 `stateDir` 下
 - [ ] `autoComment` 相关的写操作都过 `dryRun` 与 `mentionName` 双闸
+- [ ] 真正发出去的只有 `sendComment` 一处；`dryRun` 下永远不经过它
+- [ ] 新写文件都落在 `stateDir`（或预检脚本 `--dir` 指定的目录）里，不在插件包目录

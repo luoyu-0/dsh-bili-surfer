@@ -9,9 +9,12 @@
 //   node selfcheck.round.mjs --send --mention=某某 --comment="…"                    # 真发，需要已登录
 //   node selfcheck.round.mjs --dir=D:\tmp\bili --per=1        # 固定目录，跑两遍可验去重
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join, resolve, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { readText, DEFAULTS } from './lib/state.mjs'
 import { runRound } from './lib/surf.mjs'
+
+const HERE = dirname(fileURLToPath(import.meta.url))
 
 const argv = process.argv.slice(2)
 /** `--k=v` → 'v'；`--k` → true；没给 → def */
@@ -22,7 +25,14 @@ const flag = (name, def = undefined) => {
   return i < 0 ? true : hit.slice(i + 1)
 }
 const kws = argv.filter((a) => !a.startsWith('--'))
-const dir = String(flag('dir', join(tmpdir(), 'bili-surfer-round')))
+// 空 --dir（比如 shell 把 `--dir=X` 拆成了 `--dir=` + X）必须落到默认临时目录，
+// 否则一轮的 out/seen.md/state.json 会写进当前工作目录，也就是插件仓库本身。
+const dirArg = String(flag('dir', '') || '')
+const dir = dirArg ? resolve(dirArg) : join(tmpdir(), 'bili-surfer-round')
+if (dir === HERE || dir.startsWith(HERE + sep)) {
+  console.error(`--dir 不能落在插件包目录里（会把 out/seen.md/state.json 写进仓库）：${dir}`)
+  process.exit(2)
+}
 const mention = String(flag('mention', '') || '')
 const body = String(flag('comment', '') || '')
 const send = flag('send', false) === true
