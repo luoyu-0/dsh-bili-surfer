@@ -93,9 +93,13 @@ export function apply(ctx, config) {
   }
   if (!readJson(cfgFile, null)) writeJson(cfgFile, publicCfg())
 
-  ensureFiles(stateDir, [
+  const seeded = ensureFiles(stateDir, [
     { from: join(pluginDir, 'prompts', 'surfer.md'), to: 'surfer.md', overwrite: false },
   ])
+  for (const f of seeded) {
+    if (f.action === 'pending') log(`章程有新版：${join(stateDir, `${f.to}.new`)}（家目录那份你改过，没覆盖）`)
+    else log(`落了 ${f.to}（${f.action}）`)
+  }
   log(`已挂载（家=${stateDir}，来源=${cfg.source}，关键词=${cfg.keywords.join('、')}）`)
 
   /* ── 一轮的锁 ─────────────────────────────────────────────────────────── */
@@ -267,6 +271,7 @@ export function apply(ctx, config) {
         reportExists: mtime(join(p.outDir, `${dayKey()}.md`)) > 0,
         seenFile: p.seenFile,
         seenRows: (readText(p.seenFile).match(/^\|\s*\d{4}-\d{2}-\d{2}/gm) || []).length,
+        charterFile: join(stateDir, 'surfer.md'),
         autoComment: { allowed: Boolean(cfg.autoComment && cfg.mentionName), mentionName: cfg.mentionName, dryRun: cfg.dryRun },
         logTail: tail(p.logFile, 1200),
       }
@@ -427,7 +432,8 @@ export function apply(ctx, config) {
   tool({
     name: 'bili_surf_comment',
     description: '对一条视频发一条评论（会按设置补上 @ 和限长）。**只在设置里 autoComment 开着、mentionName 非空时可用**；dryRun 开着时只回显会发什么。'
-      + '⚠️ 一条视频只发一次，别连着发。',
+      + '⚠️ 一条视频只发一次，别连着发。'
+      + '\n正文得由你写：先读一遍家目录里的章程（`bili_surf_status` 的 `charterFile`）的「评论文风」一节，再动笔。',
     parameters: {
       bvid: { type: 'string', required: true, description: 'BV 号' },
       text: { type: 'string', required: true, description: '评论正文（不用写 @，会自动补）' },

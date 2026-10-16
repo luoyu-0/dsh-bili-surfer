@@ -371,17 +371,22 @@ check('resolveHome：ctx.get("dshHomePath") 是函数也兼容（当字符串用
   ok(stateDirOf(none).endsWith(join('.dsh', 'bili-surfer')), `兜底 + 子目录，实际 ${stateDirOf(none)}`)
 })
 
-check('ensureFiles：内容相同不重写；overwrite=false 时已存在就不动', () => {
+check('ensureFiles：内容相同不重写；overwrite=false 时已存在就不动（但新版会摆到 .new）', () => {
   const dir = mkdtempSync(join(tmpdir(), 'bsf-ef-'))
   try {
     const src = join(dir, 'src.md'); writeFileSync(src, 'v1\n', 'utf8')
-    ensureFiles(dir, [{ from: src, to: 'keep.md', overwrite: false }])
+    const first = ensureFiles(dir, [{ from: src, to: 'keep.md', overwrite: false }])
     eq(readText(join(dir, 'keep.md')), 'v1\n', '首次复制')
+    eq(first.map((f) => f.action).join(','), 'created', '首次要报 created')
+    eq(ensureFiles(dir, [{ from: src, to: 'keep.md', overwrite: false }]).length, 0, '内容一样就什么都不做')
     writeFileSync(join(dir, 'keep.md'), '我改过\n', 'utf8')
-    ensureFiles(dir, [{ from: src, to: 'keep.md', overwrite: false }])
-    eq(readText(join(dir, 'keep.md')), '我改过\n', 'overwrite=false 不许覆盖')
+    writeFileSync(src, 'v2\n', 'utf8')
+    const third = ensureFiles(dir, [{ from: src, to: 'keep.md', overwrite: false }])
+    eq(readText(join(dir, 'keep.md')), '我改过\n', 'overwrite=false 不许覆盖用户改过的')
+    eq(third.map((f) => f.action).join(','), 'pending', '不覆盖时要报 pending，别静默丢新版')
+    eq(readText(join(dir, 'keep.md.new')), 'v2\n', '新版要摆到 .new 旁边')
     ensureFiles(dir, [{ from: src, to: 'keep.md', overwrite: true }])
-    eq(readText(join(dir, 'keep.md')), 'v1\n', 'overwrite=true 才覆盖')
+    eq(readText(join(dir, 'keep.md')), 'v2\n', 'overwrite=true 才覆盖')
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 
