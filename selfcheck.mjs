@@ -1655,6 +1655,22 @@ check('检查脚本不用 process.exit() 收尾（改成 process.exitCode，让�
   ok((round.match(/process\.exit\(/g) || []).length <= 3, 'selfcheck.round.mjs 的 process.exit 只该出现在参数校验里')
 })
 
+// ⚠️ 回归：「本机状态目录 × 本地代码」那一节必须不依赖活进程（DSH 没开、或者只有旧构建时也要能跑），
+// 而且不许被挪到联网之后 —— 它是「升级后老装机状态还能不能被现在的代码读懂」的唯一一处检查。
+check('selfcheck.host.mjs：本机状态目录这一节先跑、不依赖活进程，两条路径都出总结', () => {
+  const src = stripComments(read('selfcheck.host.mjs'))
+  const at = src.indexOf('本机状态目录 × 本地代码')
+  const firstReq = src.indexOf('await req(')
+  ok(at >= 0, '要有「本机状态目录 × 本地代码」这一节')
+  ok(at >= 0 && firstReq > 0 && at < firstReq, '这一节必须在第一次联网之前（DSH 没起来时也要能告诉你状态目录读不读得动）')
+  ok(/countSeen/.test(src) && /parseSeen/.test(src), '要拿 parseSeen 与 countSeen 对账（三个入口必须同一口径）')
+  ok(/buildStamp=/.test(src), '要打印磁盘源码指纹（重启后 /status.build 应该等于它）')
+  ok(
+    /if \(!st\) \{[\s\S]{0,200}?hostMissing = true[\s\S]{0,200}?printSummary\(\)/.test(src),
+    '拿不到 /status 时也要出总结，而且不许说「契约一致」',
+  )
+})
+
 // ⚠️ 回归：卡住的那一轮不会自己解锁（没有任何东西会来解锁），用户只能重启 dsh。
 // 锁必须能超时自我释放，而且**两个忙判定入口**都要先释放再判忙。
 check('index.js：一轮的锁带「卡住就释放」的兜底，两处忙判定都先释放再判忙', () => {

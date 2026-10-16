@@ -9,10 +9,13 @@
 // 只有「重启 dsh 后」才会换成新代码（模块缓存）—— 于是最容易出现的失效是
 // 「用户重启前看到的旧契约」和「我改完的源码」对不上，而两边各自都「看不出问题」。
 // 这里把 client.js 真正读的字段从源码里反推出来，再逐个到活的 /status 里对账。
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { buildStamp } from './lib/state.mjs'
+import { DEFAULTS, HOME_SUBDIR, buildStamp, normalize, readJson, readText, resolveHome } from './lib/state.mjs'
+import { countSeen, parseSeen } from './lib/report.mjs'
+import { loadCredential } from './lib/surf.mjs'
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url))
 const argv = process.argv.slice(2)
@@ -57,6 +60,61 @@ function panelFields() {
   return { required: [...keys].filter((k) => !conditional.has(k)).sort(), conditional: [...keys].filter((k) => conditional.has(k)).sort() }
 }
 
+let hostMissing = false // 拿不到活进程的 /status 时，结尾不能报「契约一致」
+
+function printSummary() {
+  const bad = results.filter((r) => !r.pass)
+  for (const r of results) console.log(`${r.pass ? '  ✓' : '  ✗'} ${r.msg}`)
+  console.log('─'.repeat(64))
+  console.log(`共 ${results.length} 项，通过 ${results.length - bad.length}${bad.length ? `，失败 ${bad.length}` : ''}`)
+  if (bad.length) {
+    console.log('\n✗ 上面失败的那些就是重启后第一眼会看到的问题，按提示改源码再重启。')
+    process.exitCode = 1
+  } else if (hostMissing) {
+    console.log('✗ 活进程那一半没验成（原因见上）—— 本机状态目录那几项是过的。')
+  } else {
+    console.log('✓ 契约一致（本机状态目录 + 活着的 DSH）')
+  }
+}
+
+// 0) 本机状态目录 × 本地代码 —— 不需要活的 dsh，也不需要联网，所以放在最前面。
+//    动机：离线用例用的是临时目录，真实那一份可能带着上个版本留下的键、
+//    或者形状已经和现在的读法对不上（升级时才暴露的问题）。这些都不是「重启就好」，
+//    而是「重启后第一眼就错」。
+{
+  const S = '[本机状态] '
+  const home = join(resolveHome(null), HOME_SUBDIR)
+  console.log(`\n── 本机状态目录 × 本地代码（${home}）${'─'.repeat(10)}`)
+  ok(existsSync(home), `${S}状态目录要存在：${home}`)
+  if (existsSync(home)) {
+    const rawCfg = readJson(join(home, 'config.json'), null)
+    if (rawCfg) {
+      const cfg = normalize(rawCfg, { ...DEFAULTS })
+      const unknown = Object.keys(rawCfg).filter((k) => !(k in DEFAULTS))
+      const missing = Object.keys(DEFAULTS).filter((k) => !(k in cfg))
+      ok(missing.length === 0, `${S}配置里 DEFAULTS 的键一个都不能少（缺 ${JSON.stringify(missing)}）`)
+      if (unknown.length) console.log(`  · 这几个键现在的代码不认了、只被忽略（下次保存时清掉）：${unknown.join(', ')}`)
+    } else {
+      console.log('  · 还没有 config.json（第一次挂载时会铺一份默认的）')
+    }
+
+    const credFile = join(home, 'credential.json')
+    const cred = loadCredential(home)
+    ok(!existsSync(credFile) || Boolean(cred), `${S}credential.json 要么不存在、要么读得出 sessdata（有文件却读不出＝形状坏了）`)
+
+    const seenText = readText(join(home, 'seen.md'))
+    eq(parseSeen(seenText).size, countSeen(seenText), `${S}台账口径：parseSeen 与 countSeen 必须一样（三个入口都靠它）`)
+
+    const stt = readJson(join(home, 'state.json'), null)
+    if (stt) {
+      const known = new Set(['lastRunAt', 'lastWhy', 'lastCount', 'lastCandidates', 'lastReport', 'day', 'runsToday', 'seenTotal'])
+      const alien = Object.keys(stt).filter((k) => !known.has(k))
+      if (alien.length) console.log(`  · state.json 里有现在不用的键（不影响，只是留着）：${alien.join(', ')}`)
+    }
+    console.log(`  · 磁盘源码指纹 buildStamp=${buildStamp(ROOT)}（重启后 /status.build 应该等于它）`)
+  }
+}
+
 console.log(`\n── 活着的 DSH 上的 bili-surfer 契约（${BASE}）${'─'.repeat(12)}`)
 
 // 1) 插件在不在
@@ -80,7 +138,9 @@ try {
 // -1073740791，把「33 项过了、6 项没过」这种人话淹进崩溃信息里（实测 process.exit 4 次崩 3 次，
 // 只设 exitCode 让事件循环自己排空 4 次干净）。见 AGENTS.md 硬规矩 22。
 if (!st) {
+  hostMissing = true
   process.exitCode = 1
+  printSummary()
 } else {
   // 2) 设置页读的字段一个都不能少（client.js ↔ /status 对账）
   const { required, conditional } = panelFields()
@@ -207,15 +267,5 @@ if (!st) {
     }
   }
 
-  const bad = results.filter((r) => !r.pass)
-  for (const r of results) console.log(`${r.pass ? '  ✓' : '  ✗'} ${r.msg}`)
-  console.log('─'.repeat(64))
-  console.log(`共 ${results.length} 项，通过 ${results.length - bad.length}${bad.length ? `，失败 ${bad.length}` : ''}`)
-  if (bad.length) {
-    console.log('\n✗ 上面失败的那些就是重启后第一眼会看到的问题，按提示改源码再重启。')
-    process.exitCode = 1
-  } else {
-    console.log('✓ 活着的 DSH 上的契约与源码一致')
-  }
-
+  printSummary()
 }
