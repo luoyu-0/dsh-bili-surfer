@@ -36,8 +36,21 @@ ok('详情接口的 duration 是秒且与格式化自洽', typeof v.duration ===
 const sub = await fetchSubtitle(cli, v.bvid, v.cid)
 console.log(`INFO  subtitle: ${sub ? `${sub.lan} ${sub.lines.length} 行` : 'null（无字幕或未登录）'}`)
 
-const dm = await fetchDanmaku(cli, v.cid, { num: 200 })
-ok('fetchDanmaku', dm.length > 0, `${dm.length} 条，例如「${dm[0]}」`)
+// ⚠️ 弹幕端点对「本来就没有弹幕的视频」返回的是**合法 XML、但一个 <d> 都没有**
+// （实测：新发布的小视频 `maxlimit=3000` 却是空列表）—— 那是数据边界，不是接口坏了。
+// 所以拿几个候选依次试，全都空才算失败；顺带别再把 undefined 当「例如」打印出来。
+let dm = []
+let dmFrom = ''
+for (const cand of [v, ...found.slice(1, 4)]) {
+  const info = cand.cid ? cand : await videoInfo(cli, cand.bvid)
+  const got = await fetchDanmaku(cli, info.cid, { num: 200 })
+  if (got.length) { dm = got; dmFrom = info.bvid; break }
+}
+ok(
+  'fetchDanmaku',
+  dm.length > 0,
+  dm.length ? `${dm.length} 条（${dmFrom}），例如「${dm[0].slice(0, 24)}」` : '试了 4 条候选都一个弹幕都没有 —— 要么接口变了，要么这一批视频真的都关着弹幕',
+)
 
 const cs = await fetchComments(cli, v.bvid, v.aid, { num: 10 })
 console.log(`INFO  comments: ${cs.length} 条${cs[0] ? `，首条 ${cs[0].user}：${cs[0].message.slice(0, 30)}` : ''}`)

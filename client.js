@@ -91,6 +91,46 @@ window.__ModuleLoader__.load({
       return h('canvas', { ref, width: 232, height: 232 })
     }
 
+    /**
+     * 列表/数字这种「边打边改」的输入框：**框里显示什么由本地 state 决定**，只把规范化后的结果交给上层。
+     * ⚠️ 以前直接把 props.value 喂回 input —— keywords 每次渲染都过 `asList().join('、')`，
+     * 于是空格和「、」当场被吃掉：按提示想打第二个词永远打不进去；数字框清空立刻变 0，
+     * 再点保存就被 clamp 抬到下限（用户以为自己只是清了个框，条数却被改了）。
+     */
+    function RawField({ f, value, onChange, ...rest }) {
+      const [text, setText] = useState(() => asText(value))
+      const focused = useRef(false)
+      // 上一次「外部值」长什么样。effect 只认外部真的变了才回填：
+      // 用户刚打的「A、」/ 刚清空的数字框，外部值其实没动（数字框清空时我们不上报），不该被覆盖。
+      const lastOuter = useRef(asText(value))
+      useEffect(() => {
+        const now = asText(value)
+        if (focused.current || now === lastOuter.current) return
+        lastOuter.current = now
+        const mine = f.type === 'list' ? asText(asList(text)) : text
+        if (now !== mine) setText(now)
+      }, [value])
+      return h('input', {
+        ...rest,
+        value: text,
+        placeholder: f.type === 'list' ? '用、或空格分隔' : '',
+        onFocus: () => { focused.current = true },
+        onBlur: () => {
+          focused.current = false
+          // 离焦时把框里的字规范化一遍：列表 →「A、B」；数字清空 → 回到原值（不是 0，也不是下限）
+          setText((cur) => (f.type === 'list' ? asText(asList(cur)) : (String(cur).trim() === '' ? asText(value) : cur)))
+        },
+        onChange: (e) => {
+          const raw = e.target.value
+          setText(raw)
+          if (f.type === 'num') {
+            // 空框只是「还没打完」，别把 0 写进草稿（0 会被 clamp 成下限）
+            if (String(raw).trim() !== '') onChange(Number(raw))
+          } else onChange(f.type === 'list' ? asList(raw) : raw)
+        },
+      })
+    }
+
     function Field({ f, value, onChange }) {
       const common = { key: f.key, className: 'bsf-row' }
       let control
@@ -103,16 +143,9 @@ window.__ModuleLoader__.load({
           onChange: (e) => onChange(e.target.value),
         }, (f.values || []).map((v) => h('option', { key: v, value: v }, v)))
       } else if (f.type === 'num') {
-        control = h('input', {
-          className: 'bsf-input', type: 'number', value: Number(value) || 0,
-          min: f.min, max: f.max, style: { width: '96px' },
-          onChange: (e) => onChange(Number(e.target.value)),
-        })
+        control = h(RawField, { f, value, onChange, className: 'bsf-input', type: 'number', min: f.min, max: f.max, style: { width: '96px' } })
       } else if (f.type === 'list') {
-        control = h('input', {
-          className: 'bsf-input bsf-wide', value: asText(value), placeholder: '用、或空格分隔',
-          onChange: (e) => onChange(asList(e.target.value)),
-        })
+        control = h(RawField, { f, value, onChange, className: 'bsf-input bsf-wide' })
       } else {
         control = h('input', {
           className: 'bsf-input', value: asText(value), placeholder: f.key === 'mentionName' ? '不带 @，例如：小明' : '',
@@ -138,6 +171,15 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = useState('')
       const dirtyRef = useRef(false)
       const qrPolling = useRef(false)
+      const qrTimer = useRef(null)
+
+      /** 停掉扫码轮询。⚠️ 必须能被卸载/退出/重开时调到：以前 setInterval 的 id 没存，
+       *  点过一次「扫码登录」之后不论成功失败，页面都会每 3 秒打一次 /login/poll 直到刷新。 */
+      const stopQrPolling = useCallback(() => {
+        if (qrTimer.current) clearInterval(qrTimer.current)
+        qrTimer.current = null
+        qrPolling.current = false
+      }, [])
 
       const load = useCallback(async () => {
         const s = await api('/status')
@@ -159,6 +201,9 @@ window.__ModuleLoader__.load({
         const t = setInterval(tick, 5000)
         return () => { alive = false; clearInterval(t) }
       }, [])
+
+      // 卸载时把扫码轮询也停掉（这条以前漏了：定时器会活到页面刷新为止）
+      useEffect(() => () => stopQrPolling(), [stopQrPolling])
 
       const setField = (key, v) => {
         dirtyRef.current = true
@@ -187,6 +232,7 @@ window.__ModuleLoader__.load({
 
       const startLogin = async () => {
         setBusy('login')
+        stopQrPolling()
         const r = await api('/login/start', {})
         setBusy('')
         if (r.ok) {
@@ -194,14 +240,14 @@ window.__ModuleLoader__.load({
           setMsg('用手机 B 站 App 扫码')
           if (!qrPolling.current) {
             qrPolling.current = true
-            const t = setInterval(async () => {
+            qrTimer.current = setInterval(async () => {
               const p = await api('/login/poll', {})
               if (p.ok && p.status === 'ok') {
-                clearInterval(t); qrPolling.current = false
+                stopQrPolling()
                 setQr(null); setMsg('登录成功 ✅ 凭证只存在本机插件目录')
                 load()
               } else if (!p.ok || p.status === 'expired' || p.status === 'unknown' || p.status === 'error') {
-                clearInterval(t); qrPolling.current = false
+                stopQrPolling()
                 setMsg(p.text || '二维码过期了，重新点一次「生成二维码」')
               } else if (p.status === 'scanned') setMsg('扫到了，等你在手机上点确认')
             }, 3000)
@@ -213,6 +259,7 @@ window.__ModuleLoader__.load({
         setBusy('logout')
         await api('/logout', {})
         setBusy('')
+        stopQrPolling()
         setQr(null)
         setMsg('已退出登录')
         load()
@@ -305,15 +352,21 @@ window.__ModuleLoader__.load({
           ),
           tab === 'config' ? h('pre', { className: 'bsf-pre' }, st.logTail || '（暂无日志）') : null,
           tab === 'report' ? h('div', null,
+            // ⚠️ 「读失败」和「还没跑过」必须长得不一样：以前路由挂了也显示兜底那句，
+            // 用户会以为是自己没点过，而不知道是读盘失败了。
+            report && report.error ? h('p', { className: 'bsf-bad' }, `报告没读出来：${report.error}`) : null,
             report && report.reports && report.reports.length
               ? h('div', { className: 'bsf-row' }, report.reports.map((day) => h('button', {
                 key: day, className: `bsf-btn ${report.day === day ? 'bsf-primary' : ''}`,
                 onClick: () => openReport(day),
               }, day)))
               : null,
-            h('pre', { className: 'bsf-pre' }, (report && report.text) || '点上面的「看今天的报告」，或者先刷一轮'),
+            h('pre', { className: 'bsf-pre' }, (report && report.text) || (report && report.error ? '' : '点上面的「看今天的报告」，或者先刷一轮')),
           ) : null,
-          tab === 'seen' ? h('pre', { className: 'bsf-pre' }, (seen && seen.text) || '点上面的「看台账」') : null,
+          tab === 'seen' ? h('div', null,
+            seen && seen.error ? h('p', { className: 'bsf-bad' }, `台账没读出来：${seen.error}`) : null,
+            h('pre', { className: 'bsf-pre' }, (seen && seen.text) || (seen && seen.error ? '' : '点上面的「看台账」')),
+          ) : null,
         ),
       )
     }

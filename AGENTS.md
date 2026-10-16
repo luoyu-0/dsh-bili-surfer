@@ -49,6 +49,7 @@ selfcheck.host.mjs  对着活着的 dsh 进程验契约（`--login` 顺带打一
 19. **比 rpid 一律用 `rpid_str`，别用 `rpid`。** 回包里 `rpid` 是 JSON number，而 rpid 是 int64 —— 大数会被 `JSON.parse` 丢精度（`9007199254740993` → `9007199254740992`），拿它比对就会「刚发的评论明明在列表里，却被判成不可见」。`lib/bili.mjs` 的 `sameRpid()` 优先取 `rpid_str`，两个分支共用；`sendComment` 的返回值也一样。
 20. **一行日志只能有一个人写。** `lib/surf.mjs` 的 `runRound` 注入了 `log` 就用注入的那个（宿主那份会同时写 `surf.log` 与 dsh 日志），**没有再自己落盘**；两边都写的话每一行都会在 `surf.log` 里出现两次，而且格式不同（宿主的 `2026-10-16T12:49:59.658Z  已挂载` 与 surf.mjs 旧版的 `[2026-10-16T13:34:19.365Z] 扫码登录成功`）。踩过一次 —— 是**以读者身份读真日志**才看出来的，离线用例当时全绿（它只检查「日志里有这句话」，不检查「出现了几次」）。
 21. **章程（`prompts/surfer.md`）是给用户改的，升级不能静默消失。** `ensureFiles` 遇到「家目录那份和插件里的不一样」时**不覆盖**，而是把新版落成 `<名字>.new` 并在挂载日志里说一句（`{to, action}` 里的 `pending`）；内容一致才算无事发生。`bili_surf_status` 回的 `charterFile` 就是它的位置，`bili_surf_comment` 的描述里点名让助手先读「评论文风」——**别让章程躺在家里没人看**。
+22. **每个请求都要有超时，锁要能自己放手。** `lib/net.mjs` 的 `raw()` 一律带 `AbortSignal.timeout`（默认 15s）——没有它，一个黑洞连接（TCP 建上了但不回）能把整轮永久挂住：工具刻意不声明 `timeoutMs`、`/run` 又是后台跑的，用户只会看到设置页永远显示「正在跑」，唯一出路是重启 dsh。同理 `index.js` 的锁有 10 分钟兜底（`ROUND_MAX_MS` + `releaseStale()`），**两个忙判定入口（`doRound` 与 `POST /run`）都必须先 `releaseStale()` 再判忙**。写用例时注意：`AbortSignal.timeout` 的定时器是 **unref** 的，只有它一个待办时 node 会在触发之前就退出（`Detected unsettled top-level await`），要自己留个 `setTimeout` 撑着事件循环。
 
 ## B 站接口的真实行为（实测，别再踩）
 
@@ -104,6 +105,7 @@ selfcheck.host.mjs  对着活着的 dsh 进程验契约（`--login` 顺带打一
 - [ ] 新写文件都落在 `stateDir`（或预检脚本 `--dir` 指定的目录）里，不在插件包目录
 - [ ] **只有登录后才走得通的链条要有 stub fetch 的自检用例**（字幕链、发评论）：游客态验不了它们，靠人肉试就是等用户重启后才发现。形状照真响应造（尤其是「有没有 `code` 信封」这种一眼看不出的事）。
 - [ ] **写路径的三道闸都要有用例**（`selfcheck.mjs` E 段）：`autoComment` 关 / `mentionName` 空 / `dryRun` 开 —— 三种情况下 `POST /x/v2/reply/add` 的次数都必须是 0。
+- [ ] 新增的网络调用都走 `lib/net.mjs`（`raw()`/`getJson()`/`getWbi()`/`postForm()`），**不要直接 `fetch`**：这些入口自带 15s 超时、cookie 域名判断与业务码转异常；裸 `fetch` 会把「黑洞连接挂死整轮」放回来。
 - [ ] 重启后先跑 `node selfcheck.host.mjs --login`（只读 + 扫码链），再在设置页手点一遍；它失败的那些就是用户重启后第一眼会看到的问题。
 - [ ] **真去调用一次工具**（`bili_surf_status` / `bili_surf_search` / `bili_surf_read` / `bili_surf_report`），别只信离线用例：踩过一次 —— 搜索条目时长全显示 `00:00`，离线 68 项全绿也没拦住，是调 `bili_surf_search` 才看见的（内部函数测得再细，也可能和「真正展示出去的那几个字段」差一层）。`selfcheck.mjs` 的 **C3 段**已经把「打桩真执行每个工具 + 断言返回形状 + 过一遍 `safe()`」自动化了（含 `slimItem` 的字段、报告落盘路径、评论三道闸），但 stub 抄的是**当时**的回包 —— 接口改了形状、或者新增了一个工具，还是得真调一次。
 - [ ] 跑完一轮后，把 `out/<日期>.md` **当一个读者那样读一遍**（不是只确认「有内容」）：踩过一次 —— 弹幕当摘录时，「内容摘录」和「弹幕在聊什么」是同一批话逐行重复；热评截断成半句话却没有省略号，读起来像是评论就这么短。这两条现在都有纯函数用例。

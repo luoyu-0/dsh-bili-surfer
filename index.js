@@ -15,7 +15,7 @@
  *   · **异常不逃逸**。工具、HTTP handler、后台一轮各自兜底；未捕获异常会带走整个 dsh 进程。
  * ============================================================================
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -32,6 +32,7 @@ import {
 import {
   loadCredential, normalizeComment, paths, readItem, runRound, saveCredential, stubReport,
 } from './lib/surf.mjs'
+import { countSeen } from './lib/report.mjs'
 
 export const name = PLUGIN_ID
 export const inject = ['webServer', 'tools']
@@ -103,9 +104,26 @@ export function apply(ctx, config) {
   log(`已挂载（家=${stateDir}，来源=${cfg.source}，关键词=${cfg.keywords.join('、')}）`)
 
   /* ── 一轮的锁 ─────────────────────────────────────────────────────────── */
-  const round = { running: false, startedAt: 0, last: null }
+  const round = { running: false, startedAt: 0, last: null, lastStaleMs: 0 }
   const lastState = () => readJson(p.stateFile, {})
-  const runningInfo = () => (round.running ? { running: true, startedAt: round.startedAt, seconds: Math.round((Date.now() - round.startedAt) / 1000) } : { running: false })
+  /**
+   * 锁也要防「卡住的那一轮攥着不撒手」：没有任何东西会来解锁，用户只能看到设置页
+   * 永远显示「正在跑」，唯一出路是重启 dsh。超过上限就当它死了，释放掉并记一笔。
+   * （正常情况下每条请求 15 秒超时、选项最多 20 条，一轮远到不了这个上限。）
+   */
+  const ROUND_MAX_MS = 10 * 60_000
+  const releaseStale = () => {
+    if (!round.running) return false
+    const ms = Date.now() - round.startedAt
+    if (ms < ROUND_MAX_MS) return false
+    round.running = false
+    round.lastStaleMs = ms
+    log(`上一轮超过 ${Math.round(ROUND_MAX_MS / 60_000)} 分钟没结束（${Math.round(ms / 1000)}s），当成卡住释放掉，可以再跑一轮`)
+    return true
+  }
+  const runningInfo = () => (round.running
+    ? { running: true, startedAt: round.startedAt, seconds: Math.round((Date.now() - round.startedAt) / 1000) }
+    : { running: false, ...(round.lastStaleMs ? { lastStale: true, lastStaleSeconds: Math.round(round.lastStaleMs / 1000) } : {}) })
 
   const client = () => newClient({ cookies: loadCredential(stateDir) || undefined, logger: log })
 
@@ -137,6 +155,7 @@ export function apply(ctx, config) {
    * @param {{comments?: Record<string,string>, round?: string, dryRunSelf?: boolean}} opts
    */
   const doRound = async (opts = {}) => {
+    releaseStale()
     if (round.running) return { ok: false, busy: true, error: '上一轮还在跑', ...runningInfo() }
     if (!cfg.enabled) return { ok: false, error: '插件总开关是关的（设置 → 刷B站 → 总开关）' }
     round.running = true
@@ -153,6 +172,7 @@ export function apply(ctx, config) {
         commentWriter,
       })
       round.last = { at: new Date().toISOString(), count: r.items.length, reportPath: r.reportPath }
+      round.lastStaleMs = 0
       return r
     } catch (e) {
       const msg = String(e?.message || e)
@@ -270,7 +290,7 @@ export function apply(ctx, config) {
         lastReport: st.lastReport || '',
         reportExists: mtime(join(p.outDir, `${dayKey()}.md`)) > 0,
         seenFile: p.seenFile,
-        seenRows: (readText(p.seenFile).match(/^\|\s*\d{4}-\d{2}-\d{2}/gm) || []).length,
+        seenRows: countSeen(readText(p.seenFile)),
         charterFile: join(stateDir, 'surfer.md'),
         autoComment: { allowed: Boolean(cfg.autoComment && cfg.mentionName), mentionName: cfg.mentionName, dryRun: cfg.dryRun },
         logTail: tail(p.logFile, 1200),
@@ -291,7 +311,7 @@ export function apply(ctx, config) {
       if (args.seen) {
         const all = readText(p.seenFile).split(/\r?\n/).filter(Boolean)
         const n = Math.max(5, Math.min(500, Number(args.lines) || 60))
-        return { ok: true, kind: 'seen', path: p.seenFile, total: all.length, text: all.slice(-n).join('\n') }
+        return { ok: true, kind: 'seen', path: p.seenFile, total: countSeen(readText(p.seenFile)), text: all.slice(-n).join('\n') }
       }
       const file = join(p.outDir, `${day}.md`)
       const text = readText(file, '')
@@ -501,7 +521,7 @@ export function apply(ctx, config) {
         runsToday: st.day === dayKey() ? Number(st.runsToday || 0) : 0,
         lastCount: st.lastCount ?? 0,
         lastReport: st.lastReport || '',
-        seenRows: (readText(p.seenFile).match(/^\|\s*\d{4}-\d{2}-\d{2}/gm) || []).length,
+        seenRows: countSeen(readText(p.seenFile)),
         login: loginSession ? { pending: true, key: loginSession.key, ageSec: Math.round((Date.now() - loginSession.at) / 1000) } : { pending: false },
         logTail: tail(p.logFile, 2000),
       })
@@ -513,7 +533,7 @@ export function apply(ctx, config) {
     }
     if (!POST && path === '/seen') {
       const all = readText(p.seenFile).split(/\r?\n/).filter(Boolean)
-      return sendJson(res, 200, { ok: true, path: p.seenFile, total: Math.max(0, all.length - 4), text: all.slice(-120).join('\n') })
+      return sendJson(res, 200, { ok: true, path: p.seenFile, total: countSeen(readText(p.seenFile)), text: all.slice(-120).join('\n') })
     }
     if (POST && path === '/config') {
       const next = saveCfg(body.patch || body)
@@ -521,6 +541,7 @@ export function apply(ctx, config) {
       return sendJson(res, 200, { ok: true, config: next })
     }
     if (POST && path === '/run') {
+      releaseStale()
       if (round.running) return sendJson(res, 200, { ok: false, busy: true, ...runningInfo() })
       if (!cfg.enabled) {
         log('设置页点了「刷一轮」，但总开关是关的 → 拒绝')
@@ -562,12 +583,20 @@ export function apply(ctx, config) {
 
   function listReports() {
     try {
-      const out = []
+      const days = new Set()
       for (const line of readText(p.seenFile).split('\n')) {
         const m = /^\|\s*(\d{4}-\d{2}-\d{2})/.exec(line)
-        if (m && !out.includes(m[1])) out.push(m[1])
+        if (m) days.add(m[1])
       }
-      return out.slice(-20).reverse()
+      // ⚠️ 还要直接扫 out/*.md：整轮失败时写的那份垫底报告**不落台账行**（0 条入选时只写表头），
+      // 只从台账反推的话，最该看的那份（这轮为什么挂了）在设置页里永远点不出来。
+      try {
+        for (const f of readdirSync(p.outDir)) {
+          const m = /^(\d{4}-\d{2}-\d{2})\.md$/.exec(f)
+          if (m) days.add(m[1])
+        }
+      } catch { /* 还没有 out 目录 */ }
+      return [...days].sort().slice(-20).reverse()
     } catch {
       return []
     }

@@ -482,6 +482,27 @@ check('renderReport：四个摘录来源都受 excerptChars 约束（含简介�
   ok(!md3.includes('摘录到此'), '没超上限就不要动它')
 })
 
+check('renderReport：摘录的标题与正文必须同源；excerptChars=0 是「按设置关掉」不是「用默认值」', () => {
+  const cfg = normalize({ excerptChars: 500 }, DEFAULTS)
+  // 字幕正文是空串时，以前会「标题写字幕（N 字）、正文贴的却是简介」
+  const emptySub = { ...item, subtitle: { lan: 'zh-CN', lanDoc: '中文', ai: false, chars: 0, text: '' }, aiSummary: null, danmakuText: '', desc: '简介正文' }
+  const md = renderReport({ day: '2026-03-02', cfg, items: [emptySub], stats: {}, generatedAt: new Date() })
+  ok(!/内容摘录\*\*（[^）]*字幕/.test(md), `字幕正文为空时标题不许说字幕：${(md.match(/内容摘录[^\n]*/) || [''])[0]}`)
+  ok(md.includes('内容摘录**（视频简介）'), '该退到简介就老实写简介')
+
+  const withSub = { ...item, subtitle: { lan: 'zh-CN', lanDoc: '中文', ai: false, chars: 4, text: '字幕正文' }, aiSummary: { summary: '摘要正文' } }
+  const md2 = renderReport({ day: '2026-03-02', cfg, items: [withSub], stats: {}, generatedAt: new Date() })
+  ok(md2.includes('内容摘录**（字幕（zh-CN，4 字））'), `标题要标明来源与字数：${(md2.match(/内容摘录[^\n]*/) || [''])[0]}`)
+  ok(md2.includes('字幕正文') && !md2.includes('摘要正文'), '摘的是字幕，就不许把摘要塞进摘录')
+
+  // 0 = 关掉。以前 `Number(0) || 1200` 会静默变成 1200，「关掉摘录」这个意图根本表达不出来。
+  const off = normalize({ excerptChars: 0 }, DEFAULTS)
+  eq(off.excerptChars, 0, '0 不能被当成缺省吃掉')
+  const md3 = renderReport({ day: '2026-03-02', cfg: off, items: [withSub], stats: {}, generatedAt: new Date() })
+  ok(!md3.includes('内容摘录**（'), 'excerptChars=0 就不许摘录')
+  ok(md3.includes('关掉了'), '要说清是按设置关掉的，别让人以为没读到内容')
+})
+
 check('评论：演练（dryRun）在报告与台账里都标明「没真发」，真发的行带 rpid', () => {
   const cfg = normalize({ autoComment: true, mentionName: '小明' }, DEFAULTS)
   const dry = { ...item, mentioned: '小明', comment: { rpid: null, dryRun: true, message: '@小明 说得好' } }
@@ -495,6 +516,12 @@ check('评论：演练（dryRun）在报告与台账里都标明「没真发」�
   const sent = { ...item, mentioned: '小明', comment: { rpid: 123456, message: '@小明 说得好' } }
   const mdSent = renderReport({ day: '2026-03-02', cfg, items: [sent], stats: {}, generatedAt: new Date() })
   ok(mdSent.includes('已发') && mdSent.includes('123456'), '真发要带 rpid')
+  // README 承诺写「可见 / 暂时不可见 / 没查到」——查不到时含糊成「已发」等于每天骗用户一次
+  ok(mdSent.includes('可见性：没查到'), `查不到可见性必须老实写「没查到」：${(mdSent.match(/本轮评论[^\n]*/) || [''])[0]}`)
+  const hidden = { ...sent, comment: { ...sent.comment, visible: false } }
+  ok(renderReport({ day: '2026-03-02', cfg, items: [hidden], stats: {}, generatedAt: new Date() }).includes('可见性：暂时不可见'), '先审后放要写出来')
+  const shown = { ...sent, comment: { ...sent.comment, visible: true } }
+  ok(renderReport({ day: '2026-03-02', cfg, items: [shown], stats: {}, generatedAt: new Date() }).includes('可见性：可见'), '真可见也要写出来')
   eq(parseSeen(`${seenRow(sent, { day: '2026-03-02' })}\n`).get('BV1xx411c7mD')?.rpid, '123456', '台账 rpid 从 it.comment 兜底')
 })
 
@@ -512,6 +539,9 @@ check('normalizeComment：补 @、去 URL、按上限截断、必须 @ 到人', 
   ok(long.length <= 30, `截断后长度 ${long.length}`)
   ok(long.startsWith('@小明'), '截断后 @ 还在')
   eq(normalizeComment('   ', cfg), '', '空正文 → 空')
+  // 整条评论就是一个链接：去 URL 之后必须**再判一次空**，否则补上 @ 就变成一条正文只有 @ 的评论
+  eq(normalizeComment('https://www.bilibili.com/video/BV1xx411c7mD', cfg), '', '只有链接 → 空，不许退化成「@小明 」')
+  eq(normalizeComment('看这个 https://b23.tv/abc', cfg), '@小明 看这个', '去完 URL 还剩正文就照发，别把整条评论误杀')
   eq(normalizeComment('@小明 已经在里面了', cfg), '@小明 已经在里面了', '不重复 @')
 })
 
@@ -562,6 +592,72 @@ check('signWbi：键排序 + wts + w_rid(md5) + 过滤 !\'()* 并 encodeURICompo
 
 check('UA 常量像浏览器（B 站会挑 UA）', () => {
   ok(UA.includes('Mozilla/5.0'), UA)
+})
+
+// ⚠️ 回归：`String(undefined)` 会拼出字符串 "undefined" 发出去（`up_mid=undefined`），
+// 接口按非法参数处理 —— 症状是「有的视频就是读不到 AI 摘要」，而不是报错。
+check('signWbi：undefined / null 参数整个丢掉，不许变成字符串 "undefined"', () => {
+  const q = signWbi({ a: '1', up_mid: undefined, cid: null }, 'x'.repeat(32), 'y'.repeat(32))
+  ok(!q.includes('undefined'), q)
+  ok(!q.includes('null'), q)
+  eq(q.split('&wts=')[0], 'a=1', '只留真值参数')
+})
+
+// ⚠️ 回归：没有超时的 fetch 遇到黑洞连接（TCP 建上了但不回）会把整轮永久挂住，
+// 而工具不带 timeoutMs、`/run` 又是后台跑的 —— 用户只能重启 dsh 才能再跑。
+await checkAsync('net：每个请求自带超时（黑洞连接不许把整轮挂死）', async () => {
+  const realFetch = globalThis.fetch
+  // ⚠️ AbortSignal.timeout() 的定时器是 **unref** 的：用例里如果只有它一个待办，
+  // node 会在它触发之前就直接退出（实测「Detected unsettled top-level await」）。
+  // 真宿主里事件循环一直活着，所以没事；用例里得自己留点活干。
+  const keepAlive = setTimeout(() => {}, 5000)
+  const seen = []
+  try {
+    globalThis.fetch = (url, init = {}) => {
+      seen.push(init)
+      return new Promise((_, reject) => {
+        if (!init.signal) return // 没有 signal 就永远挂着 —— 正是要防的那件事
+        init.signal.addEventListener('abort', () => reject(init.signal.reason))
+      })
+    }
+    const cli = newClient()
+    const t0 = Date.now()
+    let err = ''
+    try {
+      // 显式给个小上限，免得用例自己等 15 秒；要验的是「signal 一定在，且到点真会中止」。
+      await cli.raw('https://api.bilibili.com/x/web-interface/nav', { timeoutMs: 50 })
+    } catch (e) {
+      err = String(e?.name || e?.message || e)
+    }
+    const ms = Date.now() - t0
+    ok(seen[0]?.signal, 'raw() 必须给 fetch 带 AbortSignal')
+    ok(ms < 3000, `超时应该很快发生（实际 ${ms}ms）`)
+    ok(err, `不带超时就会永久挂着；这里应当因超时失败（实际 err=${err || '无'}）`)
+  } finally {
+    clearTimeout(keepAlive)
+    globalThis.fetch = realFetch
+  }
+})
+
+// ⚠️ 回归：`{...rest}` 排在 headers 后面会把 Content-Type 整个顶掉，表单发成无类型 body，
+// B 站按空表单处理 —— 症状是「评论发出去了但没内容」。
+await checkAsync('net：postForm 的 Content-Type 不会被 opts.headers 顶掉，csrf 照样带上', async () => {
+  const realFetch = globalThis.fetch
+  let seen = null
+  try {
+    globalThis.fetch = async (url, init = {}) => {
+      seen = { url: String(url), headers: init.headers || {}, body: String(init.body || '') }
+      return { status: 200, headers: { getSetCookie: () => [] }, text: async () => JSON.stringify({ code: 0, data: {} }) }
+    }
+    const cli = newClient({ cookies: { sessdata: 's', bili_jct: 'JCT' } })
+    await cli.postForm('https://api.bilibili.com/x/v2/reply/add', { oid: 1, message: 'hi' }, { headers: { 'X-Test': '1' } })
+    eq(seen.headers['Content-Type'], 'application/x-www-form-urlencoded', '表单类型必须还在')
+    eq(seen.headers['X-Test'], '1', '额外 headers 照旧带上')
+    ok(seen.body.includes('csrf=JCT'), `csrf 必须来自 bili_jct：${seen.body}`)
+    ok(seen.body.includes('message=hi'), seen.body)
+  } finally {
+    globalThis.fetch = realFetch
+  }
 })
 
 // ⚠️ 这条是真实事故的回归测试：cookie 名大小写敏感，凭证文件存小写、
@@ -1173,15 +1269,25 @@ function makeFakeReact() {
         if (props && props.ref && typeof props.ref === 'object') props.ref.current = node
         out.canvases.push({ node, ctx })
       }
+      if ((type === 'input' || type === 'select') && props && typeof props.onChange === 'function') {
+        // 受控输入的 value 会被外部 props 覆盖 —— 想验「用户打的字会不会被吃掉」就必须看到它
+        out.inputs = out.inputs || []
+        out.inputs.push({ kind: type, props })
+      }
       if (typeof kids === 'string') out.text += `${kids}\n`
       walk(kids, out)
       return
     }
     if (typeof type === 'function') {
       const name = type.name || 'anon'
-      if (!cells.has(name)) cells.set(name, { hooks: [], i: 0, effects: [], dirty: false })
+      // ⚠️ 同一类型的多个实例（Field / RawField 每个字段一个）必须各有各的 hook 槽。
+      // 只按组件名存，两个输入框的 useState 会串成一个 —— 真 React 是按树里的位置区分的。
+      out._inst = out._inst || {}
+      const idx = (out._inst[name] = (out._inst[name] || 0) + 1)
+      const key = `${name}#${idx}`
+      if (!cells.has(key)) cells.set(key, { hooks: [], i: 0, effects: [], dirty: false })
       const prev = cur
-      cur = cells.get(name)
+      cur = cells.get(key)
       cur.i = 0
       cur.effects = []
       let tree
@@ -1398,10 +1504,86 @@ await checkAsync('扫码登录：矩阵逐像素画到 canvas + 3s 轮询 + 卸�
   }
   eq(grid.map((r) => r.join('')).join('\n'), rows.join('\n'), 'canvas 上的图案必须逐格等于矩阵')
 
-  ok(clientEnv.intervals.some((i) => i.ms === 3000), '没起 3s 轮询')
+  const qrId = clientEnv.intervals.findIndex((i) => i.ms === 3000) + 1
+  ok(qrId > 0, '没起 3s 轮询')
   const before = clientEnv.cleared.length
   for (const c of out.cleanups) c.cleanup()
-  ok(clientEnv.cleared.length > before, '卸载时没 clearInterval（会一直轮询下去）')
+  // ⚠️ 只数「clearInterval 出现几次」不够：状态轮询清了、扫码那条没清也能过。
+  // 必须点名：卸载时清掉的到底是不是**扫码那条**定时器。
+  ok(clientEnv.cleared.includes(qrId), `卸载要清掉扫码那条定时器（id=${qrId}），实际清了 ${JSON.stringify(clientEnv.cleared.slice(before))}`)
+})
+
+await checkAsync('扫码轮询：登录成功后自己停；重开二维码不会留下两条 3s 定时器', async () => {
+  clientEnv.routes['/api/bili-surfer/login/poll'] = { ok: true, status: 'ok' }
+  const timers = clientEnv.intervals.filter((i) => i.ms === 3000)
+  ok(timers.length > 0, '上一步点二维码应当留下一条 3s 轮询')
+  const id = clientEnv.intervals.indexOf(timers[timers.length - 1]) + 1
+  await timers[timers.length - 1].fn()
+  await new Promise((r) => setImmediate(r))
+  ok(clientEnv.cleared.includes(id), `登录成功后必须停掉自己那条轮询（id=${id}，实际清了 ${JSON.stringify(clientEnv.cleared)}）`)
+
+  let out = await renderSettled()
+  const label = out.clickables.some((c) => c.label === '换一张二维码') ? '换一张二维码' : '扫码登录'
+  out = await click(out, label)
+  const live = clientEnv.intervals.filter((i) => i.ms === 3000)
+  eq(live.length, timers.length + 1, '重开二维码只该多出一条 3s 定时器（旧的必须先停）')
+})
+
+await checkAsync('设置页：报告/台账读失败要说「读失败」，不能假装成「你还没点过」', async () => {
+  clientEnv.routes['/api/bili-surfer/report'] = { ok: false, error: 'ENOENT: 报告文件不见了' }
+  let out = await renderSettled()
+  out = await click(out, '看今天的报告')
+  ok(out.text.includes('ENOENT'), `读失败必须把错误原文显示出来：${out.text.replace(/\n/g, ' ⏎ ').slice(0, 220)}`)
+  ok(!out.text.includes('点上面的「看今天的报告」'), '读失败时不许再显示「你还没点过」那句')
+
+  clientEnv.routes['/api/bili-surfer/seen'] = { ok: false, error: 'EACCES: 台账读不了' }
+  out = await click(out, '看台账')
+  ok(out.text.includes('EACCES'), `台账读失败也要显示：${out.text.replace(/\n/g, ' ⏎ ').slice(0, 220)}`)
+  // 收尾：把路由还回好用的形状，免得影响后面的用例
+  clientEnv.routes['/api/bili-surfer/report'] = { ok: true, day: '2026-10-16', path: 'x', text: '报告正文在这里', reports: ['2026-10-16'] }
+  clientEnv.routes['/api/bili-surfer/seen'] = { ok: true, path: 'x', text: '台账正文在这里' }
+})
+
+await checkAsync('设置页输入框：列表分隔符打得进去；清空数字框不许把值改成下限', async () => {
+  clientEnv.routes['/api/bili-surfer/status'] = {
+    ...statusFixture,
+    config: { keywords: ['DeepSeek'], perDay: 5 },
+    fields: [
+      { key: 'keywords', type: 'list', label: '关键词', note: '用、或空格分隔' },
+      { key: 'perDay', type: 'num', label: '一轮几条', min: 3, max: 20 },
+    ],
+  }
+  let out = await renderSettled()
+  const pick = (o, pred) => (o.inputs || []).find(pred)
+  const kwSel = (i) => i.props.placeholder === '用、或空格分隔'
+  const kw = pick(out, kwSel)
+  ok(kw, 'list 字段要渲染成输入框')
+  eq(kw.props.value, 'DeepSeek', '初值来自 config')
+
+  // ⚠️ 用户正在打第二个词：下一次渲染的 value 必须还是他打的原样。
+  // 以前受控 input 每次渲染都过 asList().join('、')，分隔符当场被吃掉 —— 第二个词永远打不进去。
+  await kw.props.onChange({ target: { value: 'DeepSeek、' } })
+  out = await renderSettled()
+  eq(pick(out, kwSel).props.value, 'DeepSeek、', '分隔符必须留在框里')
+  await pick(out, kwSel).props.onChange({ target: { value: 'DeepSeek、Harness 插件' } })
+  out = await renderSettled()
+  eq(pick(out, kwSel).props.value, 'DeepSeek、Harness 插件', '边打边显示原样')
+
+  // 数字框清空 → 以前立刻变 0，保存时被 clamp 抬到下限（偷偷改了用户的条数）
+  const numSel = (i) => i.props.type === 'number'
+  const num = pick(out, numSel)
+  ok(num, 'num 字段要渲染成输入框')
+  await num.props.onChange({ target: { value: '' } })
+  out = await renderSettled()
+  eq(pick(out, numSel).props.value, '', '清空就是空着，别自作主张变 0')
+
+  const saveBtn = out.clickables.find((c) => c.label.startsWith('保存设置'))
+  await saveBtn.onClick()
+  const posts = clientEnv.fetched.filter((f) => f.method === 'POST' && f.url === '/api/bili-surfer/config')
+  ok(posts.length > 0, '点保存要发 POST /config')
+  const patch = posts[posts.length - 1].body.patch
+  eq(patch.perDay, 5, '清空数字框不许把条数改成下限')
+  eq(JSON.stringify(patch.keywords), JSON.stringify(['DeepSeek', 'Harness', '插件']), '关键词照样按分隔符切')
 })
 
 /* ═══════════════════════════════════════════════════ D. 源码不变式 */
@@ -1431,6 +1613,21 @@ check('宿主侧没有常驻定时器（setInterval / 长 setTimeout）', () => 
   const cli = read('client.js')
   ok((cli.match(/clearInterval/g) || []).length >= 2, 'client.js 里的轮询必须有清理')
   ok(!/setInterval/.test(read('index.js')), 'index.js 不许有定时器')
+})
+
+// ⚠️ 回归：卡住的那一轮不会自己解锁（没有任何东西会来解锁），用户只能重启 dsh。
+// 锁必须能超时自我释放，而且**两个忙判定入口**都要先释放再判忙。
+check('index.js：一轮的锁带「卡住就释放」的兜底，两处忙判定都先释放再判忙', () => {
+  const src = read('index.js')
+  ok(/const releaseStale = \(\) =>/.test(src), '必须有 releaseStale()')
+  ok(/lastStale/.test(src), '释放过要留痕（/status 里看得见 lastStale）')
+  const lines = src.split('\n')
+  const guards = lines.filter((l) => /if \(round\.running\)/.test(l))
+  eq(guards.length, 2, `忙判定应当只有两处（doRound 与 POST /run），实际 ${guards.length}`)
+  for (let i = 0; i < lines.length; i++) {
+    if (!/if \(round\.running\)/.test(lines[i])) continue
+    ok(/releaseStale\(\)/.test(lines[i - 1] || ''), `忙判定前一行必须先 releaseStale()：${lines[i - 1]} || ${lines[i]}`)
+  }
 })
 
 check('client.js 是经典脚本：无顶层 import/export，且 id 等于包名', () => {
@@ -1523,7 +1720,9 @@ function stubBili() {
         description: '简介里别放指令', tag: 'AI,编程', pic: '//i0.hdslb.com/x.jpg',
       }] } })
     }
-    if (s.includes('/x/web-interface/view')) {
+    // ⚠️ `conclusion/get` 的 URL 里也含 `/x/web-interface/view` —— 这里必须先把它排除掉，
+    // 否则下面的 view 分支会先命中，摘要用例的分支变成死代码（AI 摘要的回包形状就再没被验过）。
+    if (s.includes('/x/web-interface/view') && !s.includes('conclusion/get')) {
       return res({ code: 0, data: {
         bvid: BV, aid: 123456, cid: 999, title: '【测试】手写插件实录', desc: '简介里别放指令',
         duration: 125, pubdate: now, tname: '科技', pic: '//i0.hdslb.com/x.jpg',
@@ -1545,6 +1744,10 @@ function stubBili() {
       ] })
     }
     if (s.includes('conclusion/get')) {
+      // 真接口对游客回 -403（见 AGENTS 的接口表）。stub 也要照抄这个边界：
+      // 否则游客态会被一条假摘要「升级」成 aiSummary，降级用例就变成在测空气。
+      const cookie = String(init.headers?.Cookie || '')
+      if (!cookie.includes('SESSDATA=')) return res({ code: -403, message: '访问权限不足' })
       return res({ code: 0, data: { model_result: { summary: '讲了点东西', outline: [{ title: '一', part_outline: ['a'] }] } } })
     }
     if (s.includes('dm/list.so')) {
@@ -1722,6 +1925,29 @@ await checkAsync('runRound 没注入 log 时自己写 surf.log，且每行只许
     eq((text.match(/一轮开始/g) || []).length, 1, `同一件事故只能写一行：\n${text}`)
     ok(!/^\[\d{4}-\d\d-\d\dT/m.test(text), `日志里不许再有 [iso] 前缀（那是写了两遍的指纹）：\n${text}`)
     ok(/^\d{4}-\d\d-\d\dT[\d:.]+Z {2}\S/m.test(text), `日志格式要跟宿主那份一致（iso 后两个空格）：\n${text}`)
+  } finally { stub.restore(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+await checkAsync('runRound：字幕摘录的「N 字」是字数不是行数，且 surf 不许在这里预截断', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'bsr-sub-'))
+  const stub = stubBili()
+  try {
+    saveCredential(dir, { sessdata: 'S', bili_jct: 'J', buvid3: 'B', dedeuserid: '42' })
+    // excerptChars 故意开得比字幕还小：截断必须发生在 renderReport 里，而不是 surf 里
+    const res = await runRound({
+      dir,
+      cfg: { ...WRITE_CFG, perDay: 1, autoComment: false, dryRun: true, excerptChars: 6 },
+      log: () => {},
+    })
+    const it = res.items?.[0]
+    ok(it?.subtitle?.text, 'stub 有字幕轨，这一轮应当读到字幕')
+    const n = [...it.subtitle.text].length
+    ok(it.subtitle.text.length > 6, `surf 里不许预截断（预截断了报告就永远说不出「原文多少字」）：${JSON.stringify(it.subtitle.text)}`)
+    eq(it.subtitle.chars, n, `chars 要是字数（实际 ${it.subtitle.chars} / ${n}）`)
+    ok(it.subtitle.chars !== 2, `stub 那两条字幕是 2 行，以前这里填的就是行数 2（现在 ${it.subtitle.chars}）`)
+    const md = readText(join(dir, 'out', `${dayKey()}.md`))
+    ok(md.includes(`内容摘录**（字幕（ai-zh，AI，${n} 字））`), `标题要写清来源与字数：${(md.match(/内容摘录[^\n]*/) || [''])[0]}`)
+    ok(md.includes(`（摘录到此，原文 ${n} 字）`), `超上限必须留痕，且字数与标题一致：${md.slice(0, 600)}`)
   } finally { stub.restore(); rmSync(dir, { recursive: true, force: true }) }
 })
 
