@@ -104,3 +104,4 @@ selfcheck.host.mjs  对着活着的 dsh 进程验契约（`--login` 顺带打一
 - [ ] **写路径的三道闸都要有用例**（`selfcheck.mjs` E 段）：`autoComment` 关 / `mentionName` 空 / `dryRun` 开 —— 三种情况下 `POST /x/v2/reply/add` 的次数都必须是 0。
 - [ ] 重启后先跑 `node selfcheck.host.mjs --login`（只读 + 扫码链），再在设置页手点一遍；它失败的那些就是用户重启后第一眼会看到的问题。
 - [ ] **真去调用一次工具**（`bili_surf_status` / `bili_surf_search` / `bili_surf_read` / `bili_surf_report`），别只信离线用例：踩过一次 —— 搜索条目时长全显示 `00:00`，离线 68 项全绿也没拦住，是调 `bili_surf_search` 才看见的（内部函数测得再细，也可能和「真正展示出去的那几个字段」差一层）。
+- [ ] 跑完一轮后，把 `out/<日期>.md` **当一个读者那样读一遍**（不是只确认「有内容」）：踩过一次 —— 弹幕当摘录时，「内容摘录」和「弹幕在聊什么」是同一批话逐行重复；热评截断成半句话却没有省略号，读起来像是评论就这么短。这两条现在都有纯函数用例。

@@ -30,7 +30,7 @@ import {
 import {
   firstSentence, normalizeComment, paths, pickDanmaku, runRound, saveCredential, scoreCandidate,
 } from './lib/surf.mjs'
-import { parseSeen, renderReport, seenRow, stubReport } from './lib/report.mjs'
+import { commentLine, parseSeen, renderReport, seenRow, stubReport } from './lib/report.mjs'
 import { assertObjectNodes, compileParams, defineTool, safe, textOutput } from './lib/tools.mjs'
 import { qrMatrix, __test as qrt } from './lib/qr.mjs'
 
@@ -436,6 +436,27 @@ check('renderReport：标题/BV/统计/正文都在，表格能被 parseSeen 读
   eq(parsed.get('BV1xx411c7mD')?.day, '2026-03-02', '台账日期')
   ok((parsed.get('BV1xx411c7mD')?.title || '').includes('标题'), '台账标题')
   ok(md.length > 200, '报告不该是空壳')
+})
+
+check('renderReport：弹幕当摘录时不再和「弹幕在聊什么」逐行重复；热评截断要留痕', () => {
+  const dm = {
+    ...item, subtitle: null, aiSummary: null, desc: '', danmakuCount: 18,
+    danmakuText: '夯爆了\n还没用过', danmakuSample: ['夯爆了', '还没用过'],
+  }
+  const md = renderReport({ day: '2026-03-02', cfg: DEFAULTS, items: [dm], stats: {}, generatedAt: new Date() })
+  ok(md.includes('弹幕节选（共 18 条）'), '摘录来源要标明是弹幕')
+  ok(!md.includes('弹幕在聊什么'), '摘录本身就是弹幕了，别再列一遍同样的话')
+  eq((md.match(/夯爆了/g) || []).length, 1, '同一句弹幕只该出现一次')
+
+  // 有字幕时弹幕照列 —— 是「重复才不列」，不是「一律不列」
+  const both = { ...item, danmakuSample: ['哈哈'], danmakuText: '' }
+  const md2 = renderReport({ day: '2026-03-02', cfg: DEFAULTS, items: [both], stats: {}, generatedAt: new Date() })
+  ok(md2.includes('弹幕在聊什么') && md2.includes('哈哈'), '有字幕时弹幕照列')
+
+  // 热评截断必须留痕（半句话不能长得像整句）
+  ok(commentLine({ user: '甲', like: 3, message: '啊'.repeat(200) }).endsWith('…'), '超长热评要有省略号')
+  eq(commentLine({ user: '甲', like: 3, message: '短评' }), '甲（3 赞）：短评', '短评原样')
+  eq(commentLine({ user: '甲', like: 0, message: '  多   空格  ' }), '甲（0 赞）：多 空格', '空白要压平')
 })
 
 check('评论：演练（dryRun）在报告与台账里都标明「没真发」，真发的行带 rpid', () => {
