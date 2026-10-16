@@ -367,9 +367,13 @@ export function apply(ctx, config) {
     },
     async execute(args) {
       if (args.patch && typeof args.patch === 'object') {
+        const before = publicCfg()
         const next = saveCfg(args.patch)
+        // 只说**真变了**的键；白名单之外的键要说清被丢了 —— 否则「changed」会让人以为改成功了。
+        const changed = Object.keys(next).filter((k) => JSON.stringify(next[k]) !== JSON.stringify(before[k]))
+        const ignored = Object.keys(args.patch).filter((k) => !(k in next))
         log(`配置已更新：${JSON.stringify(args.patch)}`)
-        return { ok: true, changed: Object.keys(args.patch), config: next }
+        return { ok: true, changed, ignored, config: next }
       }
       return { ok: true, config: publicCfg(), configFile: cfgFile, fields: FIELDS }
     },

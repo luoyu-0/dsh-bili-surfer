@@ -987,6 +987,113 @@ async function hostTests() {
     ok(!existsSync(join(home, 'bili-surfer', 'credential.json')), '没登录就不该有凭证文件')
   })
 
+  /* ── C3. 工具层：把工具真执行一遍 ─────────────────────────────────────
+     这一层补的是「内部函数测了一堆，真正展示出去的字段却是错的」那个坑
+     （搜索条目时长全显示 00:00，离线 68 项全绿也没拦住 —— 是**真去调用工具**才看见的）。
+     所以这里不看函数，只看工具**返回**的东西，并且每个返回值都过一遍 safe()：
+     那不是自检的洁癖，是内核真的会拿它当硬失败（value is not lossless JSON）。 */
+  section('C3. 工具层：打桩真执行（返回形状 + lossless JSON）')
+  const toolOf = (n) => tools.find((t) => t.name === n)
+  const runTool = async (n, args = {}) => {
+    const t = toolOf(n)
+    ok(!!t, `找不到工具 ${n}`)
+    const v = await t.execute(args, {})
+    safe(v)
+    return v
+  }
+
+  const stub = stubBili()
+  try {
+    await checkAsync('bili_surf_config：真执行，改完能读回（白名单之外的键进不来，但要明说被丢了）', async () => {
+      // C 段前面的用例把 enabled 关掉了，这里顺手打开（也顺便测了写路径）
+      const w = await runTool('bili_surf_config', { patch: { enabled: true, perDay: 2, 并不存在的键: 1 } })
+      eq(w.ok, true)
+      eq(w.config.enabled, true)
+      eq(w.config.perDay, 2)
+      eq('并不存在的键' in w.config, false, '白名单之外的键不许进配置')
+      eq(w.ignored.join(','), '并不存在的键', '被丢掉的键要说清，别让 changed 看着像改成功了')
+      ok(w.changed.includes('enabled') && w.changed.includes('perDay'), `真变了的键要列出来：${w.changed}`)
+      const ro = await runTool('bili_surf_config', {})
+      ok(Array.isArray(ro.fields) && ro.fields.some((f) => f.key === 'perDay'), '只读时要回字段表（设置页照它渲染）')
+    })
+
+    await checkAsync('bili_surf_status：真执行，enabled / home / logTail / 计数都在', async () => {
+      const r = await runTool('bili_surf_status')
+      eq(r.ok, true)
+      eq(r.enabled, true, '工具返回也要带 enabled（和 /status 是同一个字段）')
+      eq(r.home, join(home, 'bili-surfer'), 'home 必须指向状态目录')
+      ok(typeof r.logTail === 'string', 'logTail 要是字符串')
+      eq(typeof r.runsToday, 'number')
+      ok(String(r.credential).includes('没有'), `没登录时要说清读不到字幕：${r.credential}`)
+    })
+
+    await checkAsync('bili_surf_search：真执行，时长必须是 "02:05" 而不是 "00:00"', async () => {
+      const r = await runTool('bili_surf_search', { keyword: 'DeepSeek Harness', num: 3 })
+      eq(r.ok, true)
+      eq(r.count, 1)
+      const it = r.items[0]
+      eq(it.duration, '02:05', '搜索接口给的是字符串 "2:05"，展示出去必须是格式化后的 mm:ss')
+      ok(!it.title.includes('<em'), `标题里的 <em> 要剥掉：${it.title}`)
+      ok(it.play.includes('万'), `播放数要格式化：${it.play}`)
+    })
+
+    await checkAsync('bili_surf_read：真执行，游客态降级到弹幕、并把降级说出来', async () => {
+      const r = await runTool('bili_surf_read', { bvid: 'BV1test0001' })
+      eq(r.ok, true)
+      eq(r.read, 'danmaku', '没有凭证时拿不到字幕轨，要明说是靠弹幕读到的')
+      eq(r.subtitle, null)
+      ok(r.danmakuSample.length > 0, '要带回弹幕样本')
+      ok(String(r.commentHint).includes('默认关'), `commentHint 要说清发评论是关着的：${r.commentHint}`)
+      const bad = await runTool('bili_surf_read', { bvid: '不是BV号' })
+      eq(bad.ok, false, '不像 BV 号要直接拒绝')
+    })
+
+    await checkAsync('bili_surf：真跑一轮（工具 → runRound → 报告落盘），slimItem 的字段都在', async () => {
+      const r = await runTool('bili_surf', { perDay: 1 })
+      eq(r.ok, true)
+      ok(r.picked >= 1, `至少要挑中一条：${JSON.stringify(r.stats)}`)
+      ok(String(r.reportPath).startsWith(home), `报告只能写进状态目录：${r.reportPath}`)
+      const it = r.items[0]
+      ok(it.bvid && it.title, '条目的基本字段')
+      ok(String(it.url).startsWith('https://www.bilibili.com/video/'), it.url)
+      eq(it.duration, '02:05', 'slimItem 的时长也要格式化')
+      ok(['subtitle', 'aiSummary', 'danmaku', 'desc'].includes(it.read), `read 只能是四种之一：${it.read}`)
+      ok(it.excerpt.length > 0 && it.excerpt.length <= 481, `摘录要瘦身（别把整篇字幕塞进对话）：${it.excerpt.length} 字`)
+      ok(Array.isArray(it.tags), 'tags 要是数组')
+      eq(typeof it.scoreText, 'string')
+    })
+
+    await checkAsync('bili_surf_report：真执行，日报与台账都读得回来', async () => {
+      const r = await runTool('bili_surf_report', {})
+      eq(r.ok, true, '刚跑完一轮，当天的报告必须读得到')
+      ok(String(r.text).includes('# B 站冲浪日报'), String(r.text).slice(0, 60))
+      const seen = await runTool('bili_surf_report', { seen: true })
+      eq(seen.ok, true)
+      eq(seen.kind, 'seen')
+      ok(String(seen.text).includes('BV1test0001'), '台账里要有刚看过的这条')
+    })
+
+    await checkAsync('bili_surf_comment：三道闸在工具层也生效，dryRun 下一个字节都不发', async () => {
+      const off = await runTool('bili_surf_comment', { bvid: 'BV1test0001', text: '不错' })
+      eq(off.ok, false, 'autoComment 关着就必须拒绝')
+      await runTool('bili_surf_config', { patch: { autoComment: true, mentionName: '@冲浪助手', dryRun: true } })
+      const dry = await runTool('bili_surf_comment', { bvid: 'BV1test0001', text: '看这个 https://b23.tv/x 挺好' })
+      eq(dry.ok, true)
+      eq(dry.dryRun, true)
+      ok(String(dry.wouldSend).startsWith('@冲浪助手'), `会发什么要说清：${dry.wouldSend}`)
+      ok(!String(dry.wouldSend).includes('http'), 'URL 要去掉')
+      eq(stub.posts().length, 0, 'dryRun 下不许有 /x/v2/reply/add')
+    })
+
+    await checkAsync('bili_surf_login：status 不建会话、也不碰网络以外的状态', async () => {
+      const r = await runTool('bili_surf_login', { action: 'status' })
+      eq(r.ok, true)
+      eq(typeof r.loggedIn, 'boolean')
+    })
+  } finally {
+    stub.restore()
+  }
+
   rmSync(home, { recursive: true, force: true })
 }
 
