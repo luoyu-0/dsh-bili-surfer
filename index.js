@@ -57,7 +57,7 @@ const FIELDS = [
   { key: 'autoComment', type: 'bool', label: '允许助手发评论 @ 我', note: '**默认关**。开了之后，助手在对话里跑一轮时才会挑一条发；评论文本永远由助手写，插件不会自己编' },
   { key: 'mentionName', type: 'string', label: '要 @ 的名字', note: '不带 @。留空 = 即使开了上面那个也绝不发' },
   { key: 'commentMax', type: 'num', min: 10, max: 1000, label: '评论最长多少字' },
-  { key: 'dryRun', type: 'bool', label: '演练模式', note: '为真时任何评论都只返回「会发什么」，不真的发' },
+  { key: 'dryRun', type: 'bool', label: '演练模式', note: '为真时评论只进报告与台账（写明「演练」），一个字都不发出去' },
 ]
 
 export function apply(ctx, config) {

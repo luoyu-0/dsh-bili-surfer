@@ -1,0 +1,25 @@
+[2026-10-16T13:25:25.140Z] 一轮开始（manual）：登录=否 来源=popular 关键词=C:\Users\lenovo\AppData\Local\Temp、\bsr-pop
+[2026-10-16T13:25:25.216Z] 候选 50 条，已排除 已看过 0 / 过期 0 / 重复 0
+[2026-10-16T13:25:25.494Z] 读毕 BV1tGJX6CEFy（弹幕）：【A2O】A2O SOUL 'SUPERSTAR' Official Music
+[2026-10-16T13:25:26.405Z] 读毕 BV1KiJk67EQ9（弹幕）：我造了一块会飞的滑板...
+[2026-10-16T13:25:27.022Z] 一轮结束：入选 2 条，用时 2.3s，报告 out\2026-10-16.md
+[2026-10-16T13:25:27.234Z] 一轮开始（manual）：登录=否 来源=recommend 关键词=C:\Users\lenovo\AppData\Local\Temp、\bsr-rcm
+[2026-10-16T13:25:27.554Z] 候选 27 条，已排除 已看过 1 / 过期 0 / 重复 0
+[2026-10-16T13:25:27.887Z] 读毕 BV1KiJk67Ezw（弹幕）：让百万人尖叫的鬼屋？我们发现了这里的秘密……
+[2026-10-16T13:25:28.888Z] 读毕 BV1ypJ16XEXm（弹幕）：逼孩子跳楼的父亲，竟被18.2万人点赞，这些家长处理叛逆的手段有多疯狂？
+[2026-10-16T13:25:29.497Z] 一轮结束：入选 2 条，用时 2.4s，报告 out\2026-10-16.md
+[2026-10-16T13:25:29.734Z] 一轮开始（manual）：登录=否 来源=search 关键词=C:\Users\lenovo\AppData\Local\Temp、\bsr-brief
+[2026-10-16T13:25:29.859Z] 搜索「C:\Users\lenovo\AppData\Local\Temp」→ 7 条
+[2026-10-16T13:25:30.265Z] 搜索「\bsr-brief」→ 0 条
+[2026-10-16T13:25:30.566Z] 候选 7 条，已排除 已看过 0 / 过期 4 / 重复 0
+[2026-10-16T13:25:30.965Z] 读毕 BV1DgXGBUEaD（仅简介）：每次开机弹出错误“无法找到脚本文件C:\users\win\AppData\Lo
+[2026-10-16T13:25:31.854Z] 读毕 BV1Qk1kBXE9C（仅简介）：Cfx.re  C  Users Administrator AppData L
+[2026-10-16T13:25:32.461Z] 一轮结束：入选 2 条，用时 2.9s，报告 out\2026-10-16.md
+[2026-10-16T13:25:32.738Z] 一轮开始（manual）：登录=否 来源=search 关键词=C:\Users\lenovo\AppData\Local\Temp、\bsr-dry
+[2026-10-16T13:25:32.836Z] 搜索「C:\Users\lenovo\AppData\Local\Temp」→ 7 条
+[2026-10-16T13:25:33.242Z] 搜索「\bsr-dry」→ 0 条
+[2026-10-16T13:25:33.555Z] 候选 7 条，已排除 已看过 2 / 过期 4 / 重复 0
+[2026-10-16T13:25:33.871Z] 读毕 BV14WYX6VE5B（弹幕）：出机密了！file:///C:/Users/ADMINI~1/AppData/L
+[2026-10-16T13:25:34.481Z] dryRun 开着 → 这一轮只演练评论，一个字都不会发出去
+[2026-10-16T13:25:34.481Z] 演练：本应评论 BV14WYX6VE5B：@冲浪助手 出机密了！file:///C:/Users/ADMINI~1/AppData/Local/Temp/SGPicFaceTpBq/8284/00931F83.pn 这期挺清楚，记下了
+[2026-10-16T13:25:34.484Z] 一轮结束：入选 1 条，用时 1.9s，报告 out\2026-10-16.md

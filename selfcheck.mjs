@@ -422,6 +422,22 @@ check('renderReport：标题/BV/统计/正文都在，表格能被 parseSeen 读
   ok(md.length > 200, '报告不该是空壳')
 })
 
+check('评论：演练（dryRun）在报告与台账里都标明「没真发」，真发的行带 rpid', () => {
+  const cfg = normalize({ autoComment: true, mentionName: '小明' }, DEFAULTS)
+  const dry = { ...item, mentioned: '小明', comment: { rpid: null, dryRun: true, message: '@小明 说得好' } }
+  const mdDry = renderReport({ day: '2026-03-02', cfg, items: [dry], stats: {}, generatedAt: new Date() })
+  ok(mdDry.includes('演练'), '报告要说清是演练')
+  ok(!mdDry.includes('已发'), '演练不该写成已发')
+  const parsedDry = parseSeen(`${seenRow(dry, { day: '2026-03-02', note: '演练（没真发）' })}\n`).get('BV1xx411c7mD')
+  eq(parsedDry?.note, '演练（没真发）', '台账备注')
+  eq(parsedDry?.rpid, '', '演练没有 rpid')
+
+  const sent = { ...item, mentioned: '小明', comment: { rpid: 123456, message: '@小明 说得好' } }
+  const mdSent = renderReport({ day: '2026-03-02', cfg, items: [sent], stats: {}, generatedAt: new Date() })
+  ok(mdSent.includes('已发') && mdSent.includes('123456'), '真发要带 rpid')
+  eq(parseSeen(`${seenRow(sent, { day: '2026-03-02' })}\n`).get('BV1xx411c7mD')?.rpid, '123456', '台账 rpid 从 it.comment 兜底')
+})
+
 check('stubReport：失败也要留下报告（底线产出）', () => {
   const md = stubReport({ day: '2026-03-02', reason: '网络挂了', logTail: 'x' })
   ok(md.includes('2026-03-02') && md.includes('网络挂了'), md.slice(0, 120))
@@ -431,6 +447,7 @@ check('normalizeComment：补 @、去 URL、按上限截断、必须 @ 到人', 
   const cfg = normalize({ mentionName: '小明', commentMax: 30, autoComment: true }, DEFAULTS)
   eq(normalizeComment('说得好', cfg), '@小明 说得好', '补 @')
   ok(!normalizeComment('看这个 https://b23.tv/abc 挺好', cfg).includes('http'), 'URL 必须去掉')
+  ok(!normalizeComment('看这个 file:///C:/Users/x/a.png 挺好', cfg).includes('file'), 'file:// 这类 scheme 也要去掉')
   const long = normalizeComment('啊'.repeat(80), cfg)
   ok(long.length <= 30, `截断后长度 ${long.length}`)
   ok(long.startsWith('@小明'), '截断后 @ 还在')
