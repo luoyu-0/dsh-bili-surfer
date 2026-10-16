@@ -1540,6 +1540,9 @@ await checkAsync('runRound 写闸门 dryRun=false：只真发一条、带 @、�
     const report = readText(join(dir, 'out', `${dayKey()}.md`))
     ok(report.includes('本轮评论'), '报告里要有本轮评论')
     ok(logs.some((l) => l.includes('已评论') && l.includes('可见性')), '日志要留下 rpid 与可见性')
+    // 日志归一个人写：宿主注入了 log，surf.mjs 就不该再往同一个文件写第二份。
+    const own = readText(join(dir, 'surf.log'))
+    eq((own.match(/一轮开始/g) || []).length, 0, `注入了 log 时 surf.mjs 不该自己再写一份 surf.log：\n${own}`)
   } finally { stub.restore(); rmSync(dir, { recursive: true, force: true }) }
 })
 
@@ -1577,6 +1580,20 @@ await checkAsync('runRound 写闸门 autoComment=true 但没 @ 对象：根本�
     eq(asked, 0, '没有 @ 对象时不许向助手要评论正文')
     eq(stub.posts().length, 0, '没有 @ 对象时不许发评论')
     ok(logs.some((l) => l.includes('mentionName 为空')), '要留一句日志说明为什么没发')
+  } finally { stub.restore(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+await checkAsync('runRound 没注入 log 时自己写 surf.log，且每行只许出现一次（不许两份格式）', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'bsr-log-'))
+  const stub = stubBili()
+  try {
+    saveCredential(dir, { sessdata: 'S', bili_jct: 'J', buvid3: 'B', dedeuserid: '42' })
+    await runRound({ dir, cfg: { ...WRITE_CFG, perDay: 1, dryRun: true } })
+    const text = readText(join(dir, 'surf.log'))
+    ok(text.includes('一轮开始'), `没有注入 log 时得自己落盘：\n${text}`)
+    eq((text.match(/一轮开始/g) || []).length, 1, `同一件事故只能写一行：\n${text}`)
+    ok(!/^\[\d{4}-\d\d-\d\dT/m.test(text), `日志里不许再有 [iso] 前缀（那是写了两遍的指纹）：\n${text}`)
+    ok(/^\d{4}-\d\d-\d\dT[\d:.]+Z {2}\S/m.test(text), `日志格式要跟宿主那份一致（iso 后两个空格）：\n${text}`)
   } finally { stub.restore(); rmSync(dir, { recursive: true, force: true }) }
 })
 
