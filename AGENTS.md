@@ -69,6 +69,7 @@ selfcheck.host.mjs  对着活着的 dsh 进程验契约（`--login` 顺带打一
 - wbi 密钥按**北京日期**缓存，跨天要重新取。
 - 字幕是「人工 + AI」混在一个列表里；排序优先级 `zh-CN → zh-Hans → zh-Hant → ai-zh → zh → en`。
 - **字幕正文那个 URL（`aisubtitle.hdslb.com/...json`）返回的是裸 JSON**：`{"body":[{from,to,location,content}]}`，**没有 `code`/`message` 信封**。所以它不能走 `getJson()`（那条路按 `code===0` 判定，`undefined !== 0` 会直接抛），要像弹幕 XML 一样用 `cli.raw()` + `res.text()` + `JSON.parse`。踩过一次：登录后**每一条视频的字幕都会「失败」**，而日志只会写一句 `字幕失败：undefined @ https://…`，很容易被当成「这个视频没字幕」。判定用 `Array.isArray(body?.body) ? body.body : body?.data?.body`（留一个信封的余地）。
+- **字幕这条链的形状已用独立实现对照过**（我是游客，拿不到真回包，属于「只能靠抄」的东西）：参考实现内置的 `bilibili-mcp` 是同一套字段 —— `D:\everything\dsh\_ref\dsh-bili-scroll\vendor\bilibili-mcp\mcp_server.py:364-390` 读 `subtitle_list["subtitles"]`、`s["lan"]`/`s["lan_doc"]`/`s["subtitle_url"]`，`//` 开头补 `https:`，`sub_data["body"]` 里逐条取 `content`。它也**不带 Referer** 就能下（我们的 Referer 是多余但无害的保险）。
 - **cookie 只发给 `*.bilibili.com`**：字幕正文在 `*.hdslb.com` 上，浏览器也不会把 b 站 cookie 发过去，`raw()` 里按 host 判断（凭证少外发一个域是一个域）。要断言这件事，`selfcheck.mjs` 的「字幕链」用例里有 `ok(!cdn.cookie, …)`。
 - 弹幕 90% 是「哈哈哈哈」和复读，`pickDanmaku()` 会先挑长且不重复的。
 

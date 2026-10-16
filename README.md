@@ -82,14 +82,16 @@ pnpm add "link:D:/everything/dsh/dsh-bili-surfer"
 ## 开发
 
 ```bash
-node selfcheck.mjs        # 离线预检：假 ctx 挂载宿主、假 DOM 挂载设置页、源码不变式断言
+node selfcheck.mjs        # 离线预检：假 ctx 挂载宿主、假 DOM 挂载设置页、源码不变式断言（含写路径打桩）
 node selfcheck.live.mjs   # 联网冒烟：真打 b 站接口，验证 lib/
 node selfcheck.round.mjs  # 联网跑一轮，报告打到临时目录
 node selfcheck.host.mjs   # 对着**正在跑的** dsh 验设置页契约（重启后跑这个）
 ```
 
-`selfcheck.host.mjs` 只读，默认不打 B 站、不改配置、不跑轮（`--run` 才跑一轮）。它会从
-`client.js` 源码里反推设置页真正读的字段名，再逐个到活着的 `/status` 里对账 —— 这样
+`selfcheck.host.mjs` 只读，默认不打 B 站、不改配置、不跑轮。两个可选的加法：
+`--login` 真打一次扫码链（要一个二维码 → 和插件自己的编码器逐格比对 → 轮询必须停在
+「未扫」，因为没人会去扫 → 退出登录），`--run` 真跑一轮。它会从 `client.js` 源码里
+反推设置页真正读的字段名，再逐个到活着的 `/status` 里对账 —— 这样
 「源码改了但进程还是旧代码」不会伪装成「设置页莫名为空」。
 
 ⚠️ **改完代码必须重启 dsh。** bundle 的 patch 只在启动时读；profile 变化时 DSH 会热挂
