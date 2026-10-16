@@ -23,7 +23,7 @@ import {
   readJson, readText, resolveHome, stateDirOf, tail, writeJson, writeText,
 } from './lib/state.mjs'
 import { BiliClient, mixinKey, signWbi, UA } from './lib/net.mjs'
-import { fmtCount, fmtTime, newClient, stripHtml } from './lib/bili.mjs'
+import { fetchSubtitle, fmtCount, fmtTime, newClient, stripHtml } from './lib/bili.mjs'
 import {
   firstSentence, normalizeComment, paths, pickDanmaku, scoreCandidate,
 } from './lib/surf.mjs'
@@ -559,6 +559,65 @@ check('safe()：非 lossless JSON 的返回值会被拦住', () => {
     let threw = false
     try { safe(bad) } catch { threw = true }
     ok(threw, `${String(bad)} 应当抛`)
+  }
+})
+
+await checkAsync('字幕链：登录后按优先级挑轨 / 协议相对 URL 补 https / 带视频页 Referer / 正文去重', async () => {
+  const realFetch = globalThis.fetch
+  const reqs = []
+  let tracks = [
+    { lan: 'en', lan_doc: 'English', ai_status: 0, subtitle_url: '//aisubtitle.hdslb.com/bfs/subtitle/en.json?auth_key=1' },
+    { lan: 'ai-zh', lan_doc: '中文（自动）', ai_status: 1, subtitle_url: '//aisubtitle.hdslb.com/bfs/subtitle/zh.json?auth_key=2' },
+  ]
+  globalThis.fetch = async (url, init) => {
+    const s = String(url)
+    reqs.push({ url: s, referer: String(init?.headers?.Referer || ''), cookie: String(init?.headers?.Cookie || '') })
+    const reply = (body) => ({ status: 200, headers: { getSetCookie: () => [] }, text: async () => JSON.stringify(body) })
+    if (s.includes('/x/web-interface/nav')) {
+      return reply({
+        code: -101, message: '账号未登录', // 未登录时业务码是 -101，但 wbi_img 照样在 data 里
+        data: { wbi_img: { img_url: `https://i0.hdslb.com/bfs/wbi/${'a'.repeat(32)}.png`, sub_url: `https://i0.hdslb.com/bfs/wbi/${'b'.repeat(32)}.png` } },
+      })
+    }
+    if (s.includes('/x/player/wbi/v2')) return reply({ code: 0, data: { subtitle: { subtitles: tracks } } })
+    // 字幕 CDN 返回的是裸 JSON（没有 code/message 信封），这里必须照着真样造。
+    if (s.includes('zh.json')) {
+      return reply({ body: [{ from: 1, to: 2, content: ' 第一句。 ' }, { from: 2, to: 3, content: '第二句。' }, { from: 3, to: 4, content: '第二句。' }] })
+    }
+    if (s.includes('zhcn.json')) return reply({ body: [{ from: 1, to: 2, content: '人工字幕第一句。' }] })
+    throw new Error(`测试没预料到的请求：${s}`)
+  }
+  try {
+    const cli = newClient({ cookies: { sessdata: 'S', bili_jct: 'J' } })
+    ok(cli.loggedIn, '有 sessdata 就该是已登录')
+
+    const sub = await fetchSubtitle(cli, 'BV1xx411c7mD', 123)
+    ok(sub, '应该挑出一条字幕')
+    eq(sub.lan, 'ai-zh', 'ai-zh 必须排在 en 前面')
+    eq(sub.ai, true, "ai_status=1 → 标成 AI 字幕")
+    eq(sub.lines.length, 3, '原始行数照记（去重交给 joinLines）')
+    eq(sub.text, '第一句。第二句。', `正文要 trim + 去重 + 拼段：${sub.text}`)
+
+    const wbi = reqs.find((r) => r.url.includes('/x/player/wbi/v2'))
+    ok(/w_rid=/.test(wbi.url) && /wts=/.test(wbi.url), `字幕轨请求必须过 wbi 签名：${wbi.url}`)
+    ok(/bvid=BV1xx411c7mD/.test(wbi.url) && /cid=123/.test(wbi.url), `参数要带上：${wbi.url}`)
+    ok(wbi.cookie.includes('SESSDATA=S'), `要带官方名 cookie：${wbi.cookie}`)
+
+    const cdn = reqs.find((r) => r.url.includes('aisubtitle'))
+    ok(cdn.url.startsWith('https://aisubtitle.hdslb.com/'), `协议相对 URL 要补成 https：${cdn.url}`)
+    ok(cdn.url.includes('auth_key=2'), `auth_key 一个字符都不能少：${cdn.url}`)
+    eq(cdn.referer, 'https://www.bilibili.com/video/BV1xx411c7mD', 'CDN 认视频页 Referer')
+    ok(!cdn.cookie, `CDN 是 *.hdslb.com，不许把 B 站 cookie 发过去：${cdn.cookie}`)
+
+    tracks = [{ lan: 'zh-CN', lan_doc: '中文（中国）', ai_status: 0, subtitle_url: '//aisubtitle.hdslb.com/bfs/subtitle/zhcn.json?auth_key=3' }, ...tracks]
+    const best = await fetchSubtitle(cli, 'BV1xx411c7mD', 123)
+    eq(best.lan, 'zh-CN', '人工简中优先于 AI 字幕')
+    eq(best.ai, false, '人工字幕不该被标成 AI')
+
+    tracks = []
+    eq(await fetchSubtitle(cli, 'BV1xx411c7mD', 123), null, '一条轨都没有时返回 null（不是抛错）')
+  } finally {
+    globalThis.fetch = realFetch
   }
 })
 

@@ -64,6 +64,8 @@ selfcheck.round.mjs 联网跑一整轮（临时目录）
 - `nav` 未登录时业务码是 `-101`，**但 `wbi_img` 照样在 `data` 里** —— 拿 wbi 密钥时必须容忍非 0 码（`getJson(..., {tolerate:true})`）。
 - wbi 密钥按**北京日期**缓存，跨天要重新取。
 - 字幕是「人工 + AI」混在一个列表里；排序优先级 `zh-CN → zh-Hans → zh-Hant → ai-zh → zh → en`。
+- **字幕正文那个 URL（`aisubtitle.hdslb.com/...json`）返回的是裸 JSON**：`{"body":[{from,to,location,content}]}`，**没有 `code`/`message` 信封**。所以它不能走 `getJson()`（那条路按 `code===0` 判定，`undefined !== 0` 会直接抛），要像弹幕 XML 一样用 `cli.raw()` + `res.text()` + `JSON.parse`。踩过一次：登录后**每一条视频的字幕都会「失败」**，而日志只会写一句 `字幕失败：undefined @ https://…`，很容易被当成「这个视频没字幕」。判定用 `Array.isArray(body?.body) ? body.body : body?.data?.body`（留一个信封的余地）。
+- **cookie 只发给 `*.bilibili.com`**：字幕正文在 `*.hdslb.com` 上，浏览器也不会把 b 站 cookie 发过去，`raw()` 里按 host 判断（凭证少外发一个域是一个域）。要断言这件事，`selfcheck.mjs` 的「字幕链」用例里有 `ok(!cdn.cookie, …)`。
 - 弹幕 90% 是「哈哈哈哈」和复读，`pickDanmaku()` 会先挑长且不重复的。
 
 ## 二维码是怎么验的（三层，别只信第一层）
@@ -92,3 +94,4 @@ selfcheck.round.mjs 联网跑一整轮（临时目录）
 - [ ] `autoComment` 相关的写操作都过 `dryRun` 与 `mentionName` 双闸
 - [ ] 真正发出去的只有 `sendComment` 一处；`dryRun` 下永远不经过它
 - [ ] 新写文件都落在 `stateDir`（或预检脚本 `--dir` 指定的目录）里，不在插件包目录
+- [ ] **只有登录后才走得通的链条要有 stub fetch 的自检用例**（字幕链、发评论）：游客态验不了它们，靠人肉试就是等用户重启后才发现。形状照真响应造（尤其是「有没有 `code` 信封」这种一眼看不出的事）。
