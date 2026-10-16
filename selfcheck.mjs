@@ -23,7 +23,7 @@ import {
   readJson, readText, resolveHome, stateDirOf, tail, writeJson, writeText,
 } from './lib/state.mjs'
 import { BiliClient, mixinKey, signWbi, UA } from './lib/net.mjs'
-import { fetchSubtitle, fmtCount, fmtTime, newClient, stripHtml } from './lib/bili.mjs'
+import { fetchAiSummary, fetchComments, fetchSubtitle, fmtCount, fmtTime, newClient, stripHtml } from './lib/bili.mjs'
 import {
   firstSentence, normalizeComment, paths, pickDanmaku, scoreCandidate,
 } from './lib/surf.mjs'
@@ -616,6 +616,57 @@ await checkAsync('字幕链：登录后按优先级挑轨 / 协议相对 URL 补
 
     tracks = []
     eq(await fetchSubtitle(cli, 'BV1xx411c7mD', 123), null, '一条轨都没有时返回 null（不是抛错）')
+  } finally {
+    globalThis.fetch = realFetch
+  }
+})
+
+await checkAsync('登录后才能验的两条读链：热评（wbi/main）与 AI 摘要的字段解析', async () => {
+  const realFetch = globalThis.fetch
+  const reqs = []
+  globalThis.fetch = async (url, init) => {
+    const s = String(url)
+    reqs.push({ url: s, cookie: String(init?.headers?.Cookie || '') })
+    const reply = (body) => ({ status: 200, headers: { getSetCookie: () => [] }, text: async () => JSON.stringify(body) })
+    if (s.includes('/x/web-interface/nav')) {
+      return reply({
+        code: -101, message: '账号未登录',
+        data: { wbi_img: { img_url: `https://i0.hdslb.com/bfs/wbi/${'a'.repeat(32)}.png`, sub_url: `https://i0.hdslb.com/bfs/wbi/${'b'.repeat(32)}.png` } },
+      })
+    }
+    // 形状照文档造：member.uname / content.message / like / replies[]；没有 cursor 就该停在一页。
+    if (s.includes('/x/v2/reply/wbi/main')) {
+      return reply({
+        code: 0, data: {
+          replies: [{
+            rpid_str: '11', mid: 7, like: 12, ctime: 1700000000,
+            member: { uname: '甲' }, content: { message: '讲得真清楚' },
+            replies: [{ rpid_str: '12', like: 1, ctime: 1700000001, member: { uname: '乙' }, content: { message: '同意' } }],
+          }],
+          page: { count: 2 },
+        },
+      })
+    }
+    if (s.includes('conclusion/get')) {
+      return reply({ code: 0, data: { model_result: { summary: '讲了三件事', outline: [{ title: '一', part_outline: ['a', 'b'] }, { title: '二', part_outline: ['c'] }] } } })
+    }
+    throw new Error(`测试没预料到的请求：${s}`)
+  }
+  try {
+    const cli = newClient({ cookies: { sessdata: 'S', bili_jct: 'J' } })
+    const cs = await fetchComments(cli, 'BV1xx411c7mD', 999, { num: 20 })
+    eq(cs.length, 1, `应该读到 1 条主楼：${JSON.stringify(cs)}`)
+    eq(cs[0].user, '甲'); eq(cs[0].message, '讲得真清楚'); eq(cs[0].like, 12)
+    eq(cs[0].rpid, '11', 'rpid 优先用字符串版')
+    eq(cs[0].replies.length, 1); eq(cs[0].replies[0].user, '乙')
+    eq(reqs.filter((r) => r.url.includes('reply/wbi/main')).length, 1, '没有 cursor 就不该翻页')
+    ok(reqs[0].cookie.includes('SESSDATA=S') || reqs[1]?.cookie?.includes('SESSDATA=S'), '读评论要带登录 cookie')
+
+    const ai = await fetchAiSummary(cli, 'BV1xx411c7mD', 123, 7)
+    eq(ai.summary, '讲了三件事')
+    eq(ai.outline.join(' | '), '一：a；b | 二：c')
+    const wbiReq = reqs.find((r) => r.url.includes('conclusion/get'))
+    ok(/w_rid=/.test(wbiReq.url) && /up_mid=7/.test(wbiReq.url), `AI 摘要要过 wbi 并带 up_mid：${wbiReq.url}`)
   } finally {
     globalThis.fetch = realFetch
   }
