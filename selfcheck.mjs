@@ -1615,6 +1615,18 @@ check('宿主侧没有常驻定时器（setInterval / 长 setTimeout）', () => 
   ok(!/setInterval/.test(read('index.js')), 'index.js 不许有定时器')
 })
 
+// ⚠️ 回归：打过真 HTTP 的脚本不许在结尾 process.exit() —— 退出时和 undici 关 keep-alive socket 抢时序
+// 会撞 libuv 断言（Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)），退出码变成 -1073740791，
+// 恰好把「33 项过了 6 项没过」这种人话淹进崩溃信息里（实测 process.exit 4 次崩 3 次）。见 AGENTS 规矩 23。
+check('检查脚本不用 process.exit() 收尾（改成 process.exitCode，让事件循环自己排空）', () => {
+  for (const f of ['selfcheck.host.mjs', 'selfcheck.live.mjs', 'selfcheck.mjs']) {
+    ok(!/^\s*process\.exit\(/m.test(stripComments(read(f))), `${f} 里还有 process.exit(`)
+  }
+  // 参数校验那几处允许保留（发生在联网之前）
+  const round = stripComments(read('selfcheck.round.mjs'))
+  ok((round.match(/process\.exit\(/g) || []).length <= 3, 'selfcheck.round.mjs 的 process.exit 只该出现在参数校验里')
+})
+
 // ⚠️ 回归：卡住的那一轮不会自己解锁（没有任何东西会来解锁），用户只能重启 dsh。
 // 锁必须能超时自我释放，而且**两个忙判定入口**都要先释放再判忙。
 check('index.js：一轮的锁带「卡住就释放」的兜底，两处忙判定都先释放再判忙', () => {
@@ -1970,4 +1982,5 @@ if (failed.length) {
   for (const f of failed) console.log(`  ✗ [${f.section}] ${f.name}\n      ${f.err}`)
 }
 console.log('═'.repeat(70))
-process.exit(failed.length ? 1 : 0)
+// ⚠️ 别用 process.exit()：见 AGENTS.md 规矩 22 —— 退出时和 undici 关 socket 抢时序会撞 libuv 断言。
+process.exitCode = failed.length ? 1 : 0

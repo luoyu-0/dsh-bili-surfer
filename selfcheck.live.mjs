@@ -68,4 +68,5 @@ const qr = await qrStart(cli)
 ok('qrStart', qr.url.startsWith('https://'), qr.url.slice(0, 60))
 
 console.log(fail ? `\n${fail} 项失败` : '\n全部通过')
-process.exit(fail ? 1 : 0)
+// ⚠️ 别用 process.exit()：真打过网络之后它可能撞 libuv 断言（AGENTS.md 规矩 22）。
+process.exitCode = fail ? 1 : 0
