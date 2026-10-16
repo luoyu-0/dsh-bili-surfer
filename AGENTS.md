@@ -72,6 +72,13 @@ selfcheck.round.mjs 联网跑一整轮（临时目录）
 2. **宿主 → 浏览器**（C/C2 段，两边都逐格比字符串，不是「有没有 canvas」）：`POST /login/start` 返回的 `rows` 必须逐格等于 `qrMatrix(登录 URL)`；`client.js` 画到 canvas 的矩形还原成矩阵后也必须逐格等于同一个矩阵。
 3. **第三方解码器**（唯一真正独立的验证；不进仓库，保持插件零依赖）：在插件目录之外的临时目录 `pnpm add jsqr`，把矩阵按 scale 3 与 8 画成 RGBA 交给 jsQR，比对解出的字符串。已过：v1 / v4 / v8（真实 passport URL）/ v12 / v20。
 
+## 已知取舍（刻意不做的事，别当成漏做）
+
+- **工具不声明 `timeoutMs`。** `packages/guard/timeout-policy` 只对**声明了** `timeoutMs` 的工具武装截止时间，没声明的原样委派（该包 README「a tool without a limit delegates untouched」）。一轮 5–30 秒，声明一个上限只会多一个「跑到一半被 `TOOL_TIMEOUT` 打断」的失败面，所以刻意不声明。
+- **没观测 `exec.signal`。** 取消一次工具调用不会立刻掐断正在跑的那一轮（每个 HTTP 请求自带超时，整轮有界）。真要在意，在 `runRound` 的条目循环入口加一次 `signal.aborted` 检查就够。
+- **不用 DSH 的 settings 服务、不导出 `Config`。** 用它得同时满足 schemastery 依赖 + entry id 对齐 + 至少一个 `volatile` 字段，三个失败点只换来「配置能写进 profile 的 cordis.patch.yml」；我们用 `<home>/bili-surfer/config.json` + 自己的设置页。
+- **不做定时。** 用户明确要求只在设置页手动跑（参考实现的 60s `setInterval` 是它最危险的一段）。
+
 ## 评审清单（提交前自查）
 
 - [ ] `node selfcheck.mjs` 全绿
