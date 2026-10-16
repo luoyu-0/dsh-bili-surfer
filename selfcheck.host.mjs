@@ -183,6 +183,20 @@ if (WITH_RUN) {
     ok(!s.json.running, '一轮要在 180 秒内结束')
     const rep2 = await req('/report')
     ok(rep2.json.text.length > 0, '跑完要能在 /report 里读到今天的日报')
+    ok(rep2.json.text.includes('# B 站冲浪日报'), '日报要有标题')
+    ok(/https:\/\/www\.bilibili\.com\/video\/BV/.test(rep2.json.text), '日报里要有可点的链接')
+    // 这几条是靠哪条链读到的：字幕 > AI 摘要 > 弹幕 > 简介（逐级降级）
+    const src = [...last.matchAll(/读毕 (BV\w+)（([^）]+)）/g)].map((m) => `${m[1]}:${m[2]}`)
+    console.log(`  · 这几条是怎么读到的：${src.length ? src.join('  ') : '（日志尾部里没有「读毕」行）'}`)
+    if (s.json.loggedIn) {
+      // 「字幕失败」是「登录了却读不到字幕」的指纹（踩过一次：CDN 返回裸 JSON，被 getJson 判成业务码非 0）。
+      // 「没有字幕轨」是正常的 —— 很多视频本来就没有字幕。
+      const fails = (last.match(/字幕失败/g) || []).length
+      ok(fails === 0, `登录态下字幕链不许报失败（实际 ${fails} 条「字幕失败」）`)
+      if (!src.some((x) => x.includes('字幕'))) {
+        console.log('  · 提醒：这一轮没有一条是靠字幕读到的。先看上面有没有「字幕失败」；都没有就只是这批视频本来没字幕。')
+      }
+    }
     console.log(`  · 本轮日志尾部：\n${(last.split('\n').slice(-6).join('\n'))}`)
   }
 }
