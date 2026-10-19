@@ -147,15 +147,21 @@ export function renderReport({ day = dayKey(), cfg, items = [], stats = {}, gene
         it.danmakuText ? { src: `弹幕节选（共 ${it.danmakuCount ?? 0} 条）`, text: it.danmakuText } : null,
         it.desc ? { src: '视频简介', text: it.desc } : null,
       ]
-      const pick = cands.find(Boolean) || { src: '（没读到内容）', text: '（没读到内容）' }
+      const pick = cands.find(Boolean)
       // 四个摘录来源共用一个上限：以前只有字幕那条路被 excerptChars 截过，
       // 简介和弹幕是全量进来的 —— 有的 UP 把整篇文章贴进简介，报告会被淹掉。
       const rawMax = Number(cfg?.excerptChars)
       const max = Number.isFinite(rawMax) && rawMax >= 0 ? Math.trunc(rawMax) : 1200
       // 摘录源就是弹幕时，「弹幕在聊什么」会和上面那段摘录逐行重复（两边都出自 pickDanmaku），
       // 只留一处 —— 摘录那小节的标题已经写了「弹幕节选（共 N 条）」。
-      const excerptIsDanmaku = pick.src.startsWith('弹幕节选')
-      if (max === 0) {
+      const excerptIsDanmaku = !!pick && pick.src.startsWith('弹幕节选')
+      if (!pick) {
+        // 四个来源全空（新视频常见：没字幕、没摘要、没人发弹幕、简介也空）。
+        // 以前这里退化成占位对象当来源，渲染出来是「**内容摘录**（（没读到内容））」
+        // 再跟一段「> （没读到内容）」——括号套括号，还把同一句话说两遍。
+        out.push('**内容摘录**：这条没读到正文（无字幕 / 无 AI 摘要 / 没读弹幕 / 简介为空）')
+        out.push('')
+      } else if (max === 0) {
         // 0 = 不要摘录。以前 `Number(0) || 1200` 会把它静默变成 1200，
         // 于是设置页上「关掉摘录」这个意图根本表达不出来，还照样贴 1200 字。
         out.push('**内容摘录**：按设置关掉了（`excerptChars = 0`，正文不写进报告）')

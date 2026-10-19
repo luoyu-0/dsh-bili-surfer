@@ -501,6 +501,16 @@ check('renderReport：摘录的标题与正文必须同源；excerptChars=0 是�
   const md3 = renderReport({ day: '2026-03-02', cfg: off, items: [withSub], stats: {}, generatedAt: new Date() })
   ok(!md3.includes('内容摘录**（'), 'excerptChars=0 就不许摘录')
   ok(md3.includes('关掉了'), '要说清是按设置关掉的，别让人以为没读到内容')
+
+  // 四个来源全空（新视频常见：没字幕 / 没摘要 / 没人发弹幕 / 简介也空）。
+  // 以前这里是退化成占位对象当来源，渲染成「**内容摘录**（（没读到内容））」再跟一段
+  // 「> （没读到内容）」—— 括号套括号，同一句话还说两遍。这是读真报告时看出来的。
+  const empty = { ...item, subtitle: null, aiSummary: null, danmakuText: '', desc: '', danmakuSample: [] }
+  const md4 = renderReport({ day: '2026-03-02', cfg, items: [empty], stats: {}, generatedAt: new Date() })
+  ok(md4.includes('这条没读到正文'), `一条正文都没读到时要直说：${(md4.match(/内容摘录[^\n]*/) || [''])[0]}`)
+  ok(!md4.includes('（（'), '不许括号套括号')
+  ok(!md4.includes('> （没读到内容）'), '不许拿占位文案当引用正文贴一遍')
+  ok((md4.match(/没读到正文/g) || []).length === 1, '同一句话说两遍读者会以为报告重了')
 })
 
 check('评论：演练（dryRun）在报告与台账里都标明「没真发」，真发的行带 rpid', () => {
