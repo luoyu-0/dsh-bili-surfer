@@ -11,8 +11,8 @@
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { readText, DEFAULTS } from './lib/state.mjs'
-import { runRound } from './lib/surf.mjs'
+import { readText, DEFAULTS } from './lib/state.js'
+import { runRound } from './lib/surf.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 

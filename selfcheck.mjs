@@ -12,7 +12,7 @@
  *
  * 跑法：node selfcheck.mjs      （需要联网的另有两个：selfcheck.live.mjs / selfcheck.round.mjs）
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -21,18 +21,18 @@ import { EventEmitter } from 'node:events'
 import {
   DEFAULTS, appendLog, clamp, dayKey, ensureFiles, fmtAge, mtime, normalize,
   readJson, readText, resolveHome, stateDirOf, tail, writeJson, writeText,
-} from './lib/state.mjs'
-import { BiliClient, mixinKey, signWbi, UA } from './lib/net.mjs'
+} from './lib/state.js'
+import { BiliClient, mixinKey, signWbi, UA } from './lib/net.js'
 import {
   fetchAiSummary, fetchComments, fetchSubtitle, fmtCount, fmtTime, isCommentVisible, newClient,
   parseDuration, searchVideos, sendComment, stripHtml,
-} from './lib/bili.mjs'
+} from './lib/bili.js'
 import {
   firstSentence, normalizeComment, paths, pickDanmaku, runRound, saveCredential, scoreCandidate,
-} from './lib/surf.mjs'
-import { commentLine, parseSeen, renderReport, seenRow, stubReport } from './lib/report.mjs'
-import { assertObjectNodes, compileParams, defineTool, safe, textOutput } from './lib/tools.mjs'
-import { qrMatrix, __test as qrt } from './lib/qr.mjs'
+} from './lib/surf.js'
+import { commentLine, parseSeen, renderReport, seenRow, stubReport } from './lib/report.js'
+import { assertObjectNodes, compileParams, defineTool, safe, textOutput } from './lib/tools.js'
+import { qrMatrix, __test as qrt } from './lib/qr.js'
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url))
 const results = []
@@ -1618,7 +1618,7 @@ await checkAsync('设置页输入框：列表分隔符打得进去；清空数�
 section('D. 源码不变式（防「静默不激活」）')
 
 const read = (rel) => readFileSync(join(ROOT, rel), 'utf8')
-const hostFiles = ['index.js', 'lib/net.mjs', 'lib/bili.mjs', 'lib/state.mjs', 'lib/surf.mjs', 'lib/report.mjs', 'lib/tools.mjs', 'lib/qr.mjs']
+const hostFiles = ['index.js', 'lib/net.js', 'lib/bili.js', 'lib/state.js', 'lib/surf.js', 'lib/report.js', 'lib/tools.js', 'lib/qr.js']
 
 /** 去掉注释再检查裸 import —— 注释里举反例（如 lib/tools.mjs 顶部的说明）不该被当成违规。 */
 const stripComments = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1')
@@ -1636,11 +1636,33 @@ check('宿主侧没有常驻定时器（setInterval / 长 setTimeout）', () => 
   for (const f of hostFiles) {
     const src = read(f)
     ok(!/setInterval\s*\(/.test(src), `${f} 里有 setInterval`)
-    ok(!/setTimeout\s*\(/.test(src) || f === 'lib/bili.mjs', `${f} 里不该有 setTimeout（bili.mjs 的 sleep 例外）`)
+    ok(!/setTimeout\s*\(/.test(src) || f === 'lib/bili.js', `${f} 里不该有 setTimeout（bili.mjs 的 sleep 例外）`)
   }
   const cli = read('client.js')
   ok((cli.match(/clearInterval/g) || []).length >= 2, 'client.js 里的轮询必须有清理')
   ok(!/setInterval/.test(read('index.js')), 'index.js 不许有定时器')
+})
+
+// ⚠️ 回归：源码是 TS，跑的是编译产物。改了 src 忘了 build，dsh 就会继续跑旧代码，而且**一声不响**
+// （/status 的 build 指纹算的是编译产物，它只会如实地告诉你「旧产物没变」）。这条只有比 mtime 拦得住。
+check('TS 源码与编译产物对得上（改了 src 就要 build，别让 dsh 跑旧代码）', () => {
+  const pairs = [['src/index.ts', 'index.js'], ['src/client.ts', 'client.js']]
+  for (const f of readdirSync(join(ROOT, 'src/lib'))) {
+    if (f.endsWith('.ts')) pairs.push([`src/lib/${f}`, `lib/${f.replace(/\.ts$/, '.js')}`])
+  }
+  ok(pairs.length >= 9, `源码/产物对只有 ${pairs.length} 对，src 目录是不是读错了`)
+  for (const [src, out] of pairs) {
+    let so = 0
+    let oo = 0
+    try { so = statSync(join(ROOT, src)).mtimeMs } catch { ok(false, `源码不见了：${src}`); continue }
+    try { oo = statSync(join(ROOT, out)).mtimeMs } catch { ok(false, `编译产物不见了：${out}（先跑 pnpm run build）`); continue }
+    // 1 秒容差：文件系统的 mtime 粒度 + 同一秒内写完两个文件
+    ok(oo >= so - 1000, `${out} 比 ${src} 旧 —— 改了 ts 忘了 build（dsh 会继续跑旧代码）`)
+  }
+  // 只留一套实现：老的 .mjs 不许回来（两套实现并存 = 改一处、跑另一处）
+  for (const f of readdirSync(join(ROOT, 'lib'))) {
+    ok(!f.endsWith('.mjs'), `lib/${f} 是旧的 JS 实现，应该只留编译出来的 .js`)
+  }
 })
 
 // ⚠️ 回归：打过真 HTTP 的脚本不许在结尾 process.exit() —— 退出时和 undici 关 keep-alive socket 抢时序

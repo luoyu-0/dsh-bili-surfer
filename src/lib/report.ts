@@ -1,6 +1,7 @@
 // 报告与台账的纯格式化层：给数据，出 Markdown。不联网、不读盘。
-import { fmtAge, dayKey } from './state.mjs'
-import { fmtCount, fmtTime } from './bili.mjs'
+import { fmtAge, dayKey } from './state.js'
+import { fmtCount, fmtTime } from './bili.js'
+import type { Item, SurfConfig, SeenEntry } from './types.js'
 
 export const SEEN_HEADER = [
   '# 看过的视频台账（每行一条，别删表头）',
@@ -13,31 +14,48 @@ export const SEEN_HEADER = [
 export const SEEN_PATH_HINT = '台账路径以本轮开头给的绝对路径为准'
 
 /**
+ * 热评一条的形状：`fetchComments` 映射出来的就是 `{ user, message, like }`
+ * （注意是 `user` 不是 `uname` —— types.ts 的 `CommentSample` 是另一个人群用的形状，
+ * 这里按真实调用点来，别拿 `CommentSample` 套）。
+ */
+interface CommentLike {
+  user?: string
+  message?: string
+  like?: number
+}
+
+/**
  * 热评在报告里的一行：`用户（N 赞）：正文`。
  * 正文超长要截断，但**必须留痕** —— 半句话不能长得像「这条评论就这么短」
  * （真在报告里见过 `…记两个入口和一条账：把`）。
  */
-export function commentLine(c, max = 80) {
+export function commentLine(c: CommentLike | null | undefined, max = 80): string {
   const msg = String(c?.message ?? '').replace(/\s+/g, ' ').trim()
   return `${c?.user ?? '匿名'}（${fmtCount(c?.like ?? 0)} 赞）：${msg.length > max ? `${msg.slice(0, max)}…` : msg}`
 }
 
+/** `seenRow` 的选项：这一行台账写哪天的、备注什么。 */
+interface SeenRowOptions {
+  day?: string
+  note?: string
+}
+
 /** 一行台账。标题里的 `|` 会破坏表格，先转义。 */
-export function seenRow(item, { day = dayKey(), note = '' } = {}) {
-  const esc = (s) => String(s ?? '').replace(/\|/g, '\\|').replace(/\n/g, ' ').slice(0, 120)
+export function seenRow(item: Item, { day = dayKey(), note = '' }: SeenRowOptions = {}): string {
+  const esc = (s: unknown): string => String(s ?? '').replace(/\|/g, '\\|').replace(/\n/g, ' ').slice(0, 120)
   // rpid 正常挂在 item.comment 上（`it.rpid` 是老字段，留着兼容）；演练行没有 rpid。
   const rpid = item.rpid || item.comment?.rpid || ''
   return `| ${day} | ${item.bvid} | ${esc(item.title)} | ${rpid} | ${item.mentioned || ''} | ${esc(note)} |`
 }
 
 /** 已看过的 BV 集合。容忍用户手改过的台账（只认 BV 号）。 */
-export function parseSeen(text) {
+export function parseSeen(text: string): Map<string, SeenEntry> {
   // 标题与备注里的 `|` 会被 seenRow 转义成 `\|`，所以这两格要允许「反斜杠 + 任意字符」，
   // 否则多一列、后面所有格子都错位（BV 号仍对，但 rpid/@/备注 会串位）。
   const cell = '((?:[^|\\\\]|\\\\.)*)'
   const re = new RegExp(`\\|\\s*(\\d{4}-\\d{2}-\\d{2})\\s*\\|\\s*(BV[0-9A-Za-z]+)\\s*\\|${cell}\\|([^|]*)\\|([^|]*)\\|${cell}\\|`)
-  const unesc = (s) => String(s ?? '').trim().replace(/\\(.)/g, '$1')
-  const map = new Map()
+  const unesc = (s: string): string => String(s ?? '').trim().replace(/\\(.)/g, '$1')
+  const map = new Map<string, SeenEntry>()
   for (const line of String(text || '').split(/\r?\n/)) {
     const m = re.exec(line)
     if (!m) continue
@@ -46,7 +64,8 @@ export function parseSeen(text) {
   return map
 }
 
-const bullet = (label, value) => (value === undefined || value === null || value === '' ? null : `- **${label}**：${value}`)
+const bullet = (label: string, value: unknown): string | null =>
+  value === undefined || value === null || value === '' ? null : `- **${label}**：${value}`
 
 /**
  * 台账条数：只数「像一行台账」的行（表头、空行、用户自己写的注释都不算）。
@@ -54,20 +73,38 @@ const bullet = (label, value) => (value === undefined || value === null || value
  * 以前三处各写各的（一个数行数、一个 `all.length - 4`、一个把表头也算进去），
  * 同一份 seen.md 能给出 N / N-1 / N+3 三个数 —— 用户问助手和看设置页会得到不同答案。
  */
-export const countSeen = (text) => (String(text || '').match(/^\|\s*\d{4}-\d{2}-\d{2}\s*\|/gm) || []).length
+export const countSeen = (text: string): number =>
+  (String(text || '').match(/^\|\s*\d{4}-\d{2}-\d{2}\s*\|/gm) || []).length
+
+/** `runRound` 里累加的那份统计（报告只读其中几项，别的键原样放过）。 */
+interface ReportStats {
+  candidates?: number
+  why?: string
+  skipped?: Record<string, number>
+  loginHint?: string
+}
+
+/** `renderReport` 的入参。 */
+interface RenderReportOptions {
+  day?: string
+  cfg: SurfConfig
+  items?: Item[]
+  stats?: ReportStats
+  generatedAt?: Date
+}
 
 /**
  * 渲染一份日报。
- * @param {{day, cfg, items, stats, generatedAt}} p
+ * @param p 入参见 `RenderReportOptions`
  */
-export function renderReport({ day = dayKey(), cfg, items = [], stats = {}, generatedAt = new Date() }) {
+export function renderReport({ day = dayKey(), cfg, items = [], stats = {}, generatedAt = new Date() }: RenderReportOptions): string {
   const level = cfg.reportLevel
   if (level === 'off') {
     return `# B 站冲浪日报 · ${day}\n\n> reportLevel=off：本轮不写正文。候选 ${stats.candidates ?? 0} 条，入选 ${items.length} 条。\n`
   }
-  const p = (n) => String(n).padStart(2, '0')
+  const p = (n: number): string => String(n).padStart(2, '0')
   const stamp = `${generatedAt.getFullYear()}-${p(generatedAt.getMonth() + 1)}-${p(generatedAt.getDate())} ${p(generatedAt.getHours())}:${p(generatedAt.getMinutes())}`
-  const out = []
+  const out: string[] = []
   out.push(`# B 站冲浪日报 · ${day}`)
   out.push('')
   out.push(
@@ -183,8 +220,15 @@ export function renderReport({ day = dayKey(), cfg, items = [], stats = {}, gene
   return out.join('\n')
 }
 
+/** `stubReport` 的入参。 */
+interface StubReportOptions {
+  day?: string
+  reason?: string
+  logTail?: string
+}
+
 /** 数据不够或整轮失败时垫底的一行，保证每天都有产出。 */
-export function stubReport({ day = dayKey(), reason = '', logTail = '' }) {
+export function stubReport({ day = dayKey(), reason = '', logTail = '' }: StubReportOptions): string {
   return [
     `# B 站冲浪日报 · ${day}`,
     '',

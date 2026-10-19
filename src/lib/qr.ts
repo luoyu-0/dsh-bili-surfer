@@ -27,13 +27,13 @@ const LOG = new Uint8Array(256)
   for (let i = 255; i < 512; i++) EXP[i] = EXP[i - 255]
 }
 
-const gfMul = (a, b) => (a === 0 || b === 0 ? 0 : EXP[LOG[a] + LOG[b]])
+const gfMul = (a: number, b: number): number => (a === 0 || b === 0 ? 0 : EXP[LOG[a] + LOG[b]])
 
 /** 生成多项式 g(x) = ∏(x - α^i)，i=0..deg-1 */
-function genPoly(deg) {
+function genPoly(deg: number): number[] {
   let g = [1]
   for (let i = 0; i < deg; i++) {
-    const next = new Array(g.length + 1).fill(0)
+    const next = new Array<number>(g.length + 1).fill(0)
     for (let j = 0; j < g.length; j++) {
       next[j] ^= g[j]
       next[j + 1] ^= gfMul(g[j], EXP[i])
@@ -44,9 +44,9 @@ function genPoly(deg) {
 }
 
 /** 多项式除法取余：得到 ecLen 个纠错码字 */
-function rsEC(data, ecLen) {
+function rsEC(data: readonly number[] | Uint8Array, ecLen: number): number[] {
   const g = genPoly(ecLen)
-  const rem = new Array(ecLen).fill(0)
+  const rem = new Array<number>(ecLen).fill(0)
   for (const byte of data) {
     const factor = byte ^ rem[0]
     rem.shift()
@@ -60,11 +60,18 @@ function rsEC(data, ecLen) {
 
 // ------------------------------------------------------------------ 版本表
 
+/** 一组 RS 分块：`[块数, 每块数据码字数]` */
+type EccGroup = readonly [count: number, per: number]
+
+/** 一行分块表：`[总数据码字数, 每块纠错码字数, 分块列表]` */
+type EccRow = readonly [dataWords: number, ecLen: number, groups: readonly EccGroup[]]
+
 /**
  * ECC 等级 M 的 RS 分块表（版本 1–20）。
  * [总数据码字数, 每块纠错码字数, [ [块数, 每块数据码字数], ... ]]
  */
-const ECC_M = [
+// 0 号位是 null 占位（版本从 1 开始）；表本身与 JS 版逐项一致，运行期不会取到 null。
+const ECC_M: readonly (EccRow | null)[] = [
   null,
   [16, 10, [[1, 16]]],
   [28, 16, [[1, 28]]],
@@ -89,7 +96,7 @@ const ECC_M = [
 ]
 
 /** 校准图案中心坐标 */
-const ALIGN = [
+const ALIGN: readonly (readonly number[] | null)[] = [
   null, [], [6, 18], [6, 22], [6, 26], [6, 30], [6, 34], [6, 22, 38], [6, 24, 42],
   [6, 26, 46], [6, 28, 50], [6, 30, 54], [6, 32, 58], [6, 34, 62], [6, 26, 46, 66],
   [6, 26, 48, 70], [6, 26, 50, 74], [6, 30, 54, 78], [6, 30, 56, 82], [6, 30, 58, 86],
@@ -97,7 +104,7 @@ const ALIGN = [
 ]
 
 /** 末尾补位比特（放完码字后还空着的模块数） */
-const REMAINDER = [
+const REMAINDER: readonly number[] = [
   0, 0, 7, 7, 7, 7, 7, 0, 0, 0, 0, 0, 0, 0,
   3, 3, 3, 3, 3, 3, 3,
 ]
@@ -105,14 +112,14 @@ const REMAINDER = [
 // ------------------------------------------------------------------ BCH
 
 /** 版本信息（v≥7）：6 位版本 + 12 位 BCH(18,6)，生成多项式 0x1F25 */
-function versionBits(version) {
+function versionBits(version: number): number {
   let d = version << 12
   for (let i = 17; i >= 12; i--) if (d & (1 << i)) d ^= 0x1f25 << (i - 12)
   return ((version << 12) | d) & 0x3ffff
 }
 
 /** 格式信息：2 位 ECC 等级 + 3 位掩码 + 10 位 BCH(15,5)，再异或 0x5412 */
-function formatBits(mask) {
+function formatBits(mask: number): number {
   const ecc = 0b00 // M
   const data = (ecc << 3) | mask
   let d = data << 10
@@ -122,9 +129,9 @@ function formatBits(mask) {
 
 // ------------------------------------------------------------------ 编码
 
-function pickVersion(byteLen) {
+function pickVersion(byteLen: number): number {
   for (let v = 1; v <= 20; v++) {
-    const [dataWords] = ECC_M[v]
+    const [dataWords] = ECC_M[v]!
     const countBits = v < 10 ? 8 : 16
     const need = Math.ceil((4 + countBits + byteLen * 8) / 8)
     if (need <= dataWords) return v
@@ -133,18 +140,20 @@ function pickVersion(byteLen) {
 }
 
 /** 文本 → 数据码字（模式指示符 + 长度 + 内容 + 终止符 + 填充） */
-function encodeData(text, version) {
+function encodeData(text: string, version: number): number[] {
   const bytes = new TextEncoder().encode(text)
-  const [dataWords] = ECC_M[version]
-  const bits = []
-  const push = (value, len) => { for (let i = len - 1; i >= 0; i--) bits.push((value >> i) & 1) }
+  const [dataWords] = ECC_M[version]!
+  const bits: number[] = []
+  const push = (value: number, len: number): void => {
+    for (let i = len - 1; i >= 0; i--) bits.push((value >> i) & 1)
+  }
   push(0b0100, 4) // 字节模式
   push(bytes.length, version < 10 ? 8 : 16)
   for (const b of bytes) push(b, 8)
   // 终止符最多 4 位，然后补齐到字节边界
   for (let i = 0; i < 4 && bits.length < dataWords * 8; i++) bits.push(0)
   while (bits.length % 8 !== 0) bits.push(0)
-  const words = []
+  const words: number[] = []
   for (let i = 0; i < bits.length; i += 8) {
     let b = 0
     for (let j = 0; j < 8; j++) b = (b << 1) | bits[i + j]
@@ -157,9 +166,9 @@ function encodeData(text, version) {
 }
 
 /** 按分块表拆数据 → 各自算纠错 → 交错成一个码字序列 */
-function interleave(words, version) {
-  const [, ecLen, groups] = ECC_M[version]
-  const blocks = []
+function interleave(words: readonly number[], version: number): number[] {
+  const [, ecLen, groups] = ECC_M[version]!
+  const blocks: { data: number[]; ec: number[] }[] = []
   let at = 0
   for (const [count, per] of groups) {
     for (let i = 0; i < count; i++) {
@@ -168,7 +177,7 @@ function interleave(words, version) {
       blocks.push({ data, ec: rsEC(data, ecLen) })
     }
   }
-  const out = []
+  const out: number[] = []
   const maxData = Math.max(...blocks.map((b) => b.data.length))
   for (let i = 0; i < maxData; i++) for (const b of blocks) if (i < b.data.length) out.push(b.data[i])
   for (let i = 0; i < ecLen; i++) for (const b of blocks) out.push(b.ec[i])
@@ -177,7 +186,7 @@ function interleave(words, version) {
 
 // ------------------------------------------------------------------ 画矩阵
 
-const MASKS = [
+const MASKS: readonly ((i: number, j: number) => boolean)[] = [
   (i, j) => (i + j) % 2 === 0,
   (i) => i % 2 === 0,
   (i, j) => j % 3 === 0,
@@ -188,18 +197,18 @@ const MASKS = [
   (i, j) => (((i + j) % 2) + ((i * j) % 3)) % 2 === 0,
 ]
 
-function makeMatrix(version) {
+function makeMatrix(version: number): { size: number; m: number[][]; fixed: boolean[][] } {
   const size = version * 4 + 17
-  const m = Array.from({ length: size }, () => new Array(size).fill(-1)) // -1 = 空
-  const fixed = Array.from({ length: size }, () => new Array(size).fill(false))
-  const set = (r, c, v) => {
+  const m = Array.from({ length: size }, () => new Array<number>(size).fill(-1)) // -1 = 空
+  const fixed = Array.from({ length: size }, () => new Array<boolean>(size).fill(false))
+  const set = (r: number, c: number, v: number): void => {
     if (r < 0 || c < 0 || r >= size || c >= size) return
     m[r][c] = v
     fixed[r][c] = true
   }
 
   // 三个定位图案 + 分隔带
-  const finder = (row, col) => {
+  const finder = (row: number, col: number): void => {
     for (let r = -1; r <= 7; r++) {
       for (let c = -1; c <= 7; c++) {
         const inside = r >= 0 && r <= 6 && c >= 0 && c <= 6
@@ -220,7 +229,7 @@ function makeMatrix(version) {
   }
 
   // 校准图案（跳过与定位图案重叠的三个角）
-  const centers = ALIGN[version]
+  const centers = ALIGN[version]!
   for (const r of centers) {
     for (const c of centers) {
       const corner = (r <= 8 && c <= 8) || (r <= 8 && c >= size - 9) || (r >= size - 9 && c <= 8)
@@ -258,9 +267,9 @@ function makeMatrix(version) {
 }
 
 /** 把码字比特按之字形填进矩阵 */
-function placeData(m, fixed, words, version) {
+function placeData(m: number[][], fixed: boolean[][], words: readonly number[], version: number): void {
   const size = m.length
-  const bits = []
+  const bits: number[] = []
   for (const w of words) for (let i = 7; i >= 0; i--) bits.push((w >> i) & 1)
   for (let i = 0; i < REMAINDER[version]; i++) bits.push(0)
   let at = 0
@@ -279,10 +288,10 @@ function placeData(m, fixed, words, version) {
 }
 
 /** 四条罚分规则，选最低分的掩码 */
-function penalty(m) {
+function penalty(m: number[][]): number {
   const size = m.length
   let score = 0
-  const runScore = (line) => {
+  const runScore = (line: readonly number[]): number => {
     let s = 0
     let run = 1
     for (let i = 1; i < line.length; i++) {
@@ -306,7 +315,8 @@ function penalty(m) {
   // 1011101 0000 / 0000 1011101
   const pat1 = [1, 0, 1, 1, 1, 0, 1, 0, 0, 0, 0]
   const pat2 = [0, 0, 0, 0, 1, 0, 1, 1, 1, 0, 1]
-  const hit = (line, at, pat) => pat.every((p, k) => line[at + k] === p)
+  const hit = (line: readonly number[], at: number, pat: readonly number[]): boolean =>
+    pat.every((p, k) => line[at + k] === p)
   for (let i = 0; i < size; i++) {
     const row = m[i]
     const col = m.map((r) => r[i])
@@ -328,7 +338,7 @@ function penalty(m) {
  * @param {string} text 要编码的内容（登录 URL 都是 ASCII）
  * @returns {{size:number, modules:number[][], version:number}}
  */
-export function qrMatrix(text) {
+export function qrMatrix(text: string): { size: number; modules: number[][]; version: number; mask: number } {
   const s = String(text ?? '')
   const version = pickVersion(new TextEncoder().encode(s).length)
   if (!version) throw new Error(`内容太长（${s.length} 字符），二维码版本 1–20 装不下`)
@@ -337,7 +347,7 @@ export function qrMatrix(text) {
   placeData(m, makeMatrixFixed(version, m), words, version)
 
   // 逐个掩码试，取罚分最低的那个（同分取序号小的）
-  let best = null
+  let best: { score: number; mask: number; matrix: number[][] } | null = null
   for (let mask = 0; mask < 8; mask++) {
     const cand = m.map((row) => row.slice())
     applyMask(cand, version, mask)
@@ -345,16 +355,16 @@ export function qrMatrix(text) {
     const score = penalty(cand)
     if (!best || score < best.score) best = { score, mask, matrix: cand }
   }
-  return { size, modules: best.matrix, version, mask: best.mask }
+  return { size, modules: best!.matrix, version, mask: best!.mask }
 }
 
 /** 重新算一遍"哪些格子是功能图案"——placeData 需要它，独立算比带状态更省心 */
-function makeMatrixFixed(version, m) {
+function makeMatrixFixed(version: number, m: number[][]): boolean[][] {
   const probe = makeMatrix(version)
   return probe.fixed
 }
 
-function applyMask(m, version, mask) {
+function applyMask(m: number[][], version: number, mask: number): void {
   const size = m.length
   const fixed = makeMatrixFixed(version, m)
   for (let r = 0; r < size; r++) {
@@ -366,10 +376,10 @@ function applyMask(m, version, mask) {
 }
 
 /** 填格式信息（两份）与版本信息（两份） */
-function writeFormats(m, version, mask) {
+function writeFormats(m: number[][], version: number, mask: number): void {
   const size = m.length
   const fmt = formatBits(mask)
-  const bit = (i) => (fmt >> i) & 1
+  const bit = (i: number): number => (fmt >> i) & 1
   // 左上竖向 + 横向
   for (let i = 0; i <= 5; i++) m[8][i] = bit(i)
   m[8][7] = bit(6)

@@ -1,6 +1,6 @@
 // 联网冒烟测试：直接打 b 站真接口，验证 lib/ 三个模块。
 // 用法：node selfcheck.live.mjs [关键词]
-import { newClient, whoami, searchVideos, videoInfo, fetchSubtitle, fetchDanmaku, fetchComments, tags, popular, recommend, qrStart, fmtCount, fmtTime } from './lib/bili.mjs'
+import { newClient, whoami, searchVideos, videoInfo, fetchSubtitle, fetchDanmaku, fetchComments, tags, popular, recommend, qrStart, fmtCount, fmtTime } from './lib/bili.js'
 
 const kw = process.argv[2] || 'DeepSeek Harness'
 const cli = newClient()

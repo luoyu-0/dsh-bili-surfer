@@ -5,15 +5,56 @@ import { createHash } from 'node:crypto'
 export const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 
+/** 查询参数/表单值：undefined 与 null 会被 signWbi 滤掉，不会变成字符串 "undefined"。 */
+export type Params = Record<string, string | number | boolean | undefined | null>
+
+/** 凭证文件/二维码回填用的 cookie 表（键是小写别名）。 */
+export type Cookies = Record<string, string>
+
+/** tolerate=true 时返回的信封：调用方自己看业务码，不抛错。 */
+export interface Envelope<T = unknown> {
+  ok: boolean
+  /** b 站业务码；回包根本没有 code 时是 null（不是 0）。 */
+  code: number | null
+  message: string
+  data: T
+  raw?: string
+}
+
+/**
+ * 请求体的形状。故意不用 DOM 的 `BodyInit`：这个插件跑在 Node 里，tsconfig 的 lib 只有 ES，
+ * 用 DOM 类型会逼所有人去开 `"lib": ["DOM"]`（那会让 `document`/`window` 变成全局，反而更糟）。
+ */
+export type RequestBody = string | URLSearchParams | null
+
+/** `raw()` 的可选项。 */
+export interface RawOpts {
+  method?: string
+  headers?: Record<string, string>
+  body?: RequestBody
+  redirect?: 'follow' | 'error' | 'manual'
+  timeoutMs?: number
+}
+
+/** 业务码 + 可读消息的异常，调用方不必再判 code。 */
+export class BiliError extends Error {
+  readonly code: number | undefined | null
+  constructor(message: string, code?: number | null) {
+    super(message)
+    this.name = 'BiliError'
+    this.code = code
+  }
+}
+
 // wbi 混淆表，来自 b 站前端 img_key/sub_key → w_rid 的固定置换。
-const MIXIN_TAB = [
+const MIXIN_TAB: readonly number[] = [
   46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49, 33,
   9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40, 61, 26,
   17, 0, 1, 60, 51, 30, 4, 22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34,
   44, 52,
 ]
 
-const md5 = (s) => createHash('md5').update(s).digest('hex')
+const md5 = (s: string): string => createHash('md5').update(s).digest('hex')
 
 /**
  * 每个请求都要有上限。没有它，一个黑洞连接（TCP 建上了但不回）能把整轮永久挂住：
@@ -23,15 +64,15 @@ const md5 = (s) => createHash('md5').update(s).digest('hex')
 const DEFAULT_TIMEOUT_MS = 15_000
 
 /** wbi 只接受这些字符原样，其余必须 encodeURIComponent（b 站前端同款规则）。 */
-function enc(v) {
+function enc(v: unknown): string {
   return encodeURIComponent(String(v).replace(/[!'()*]/g, ''))
 }
 
-export function mixinKey(imgKey, subKey) {
+export function mixinKey(imgKey: string, subKey: string): string {
   return MIXIN_TAB.map((n) => (imgKey + subKey)[n]).join('').slice(0, 32)
 }
 
-export function signWbi(params, imgKey, subKey) {
+export function signWbi(params: Params, imgKey: string, subKey: string): string {
   const wts = Math.round(Date.now() / 1000)
   // ⚠️ 必须滤掉 undefined/null：`enc()` 会把它们变成字符串 "undefined"，
   // 于是 `up_mid=undefined` 这种参数被发出去，接口按「非法参数」处理，
@@ -44,47 +85,67 @@ export function signWbi(params, imgKey, subKey) {
   return `${query}&wts=${wts}&w_rid=${md5(query + mixinKey(imgKey, subKey))}`
 }
 
-export class BiliError extends Error {
-  constructor(message, code) {
-    super(message)
-    this.name = 'BiliError'
-    this.code = code
-  }
-}
-
 /**
  * 凭证文件里存的是小写键，而 B 站只认官方名（`SESSDATA` 不认 `sessdata`）。
  * 存盘 / 回填两个方向都走这一张表 —— 否则会出现「扫码说成功，读字幕却仍是游客」，
  * 而且全程不报错，极难排查。
  */
-const COOKIE_ALIAS = new Map(Object.entries({
-  sessdata: 'SESSDATA',
-  bili_jct: 'bili_jct',
-  buvid3: 'buvid3',
-  dedeuserid: 'DedeUserID',
-}))
+const COOKIE_ALIAS = new Map<string, string>(
+  Object.entries({
+    sessdata: 'SESSDATA',
+    bili_jct: 'bili_jct',
+    buvid3: 'buvid3',
+    dedeuserid: 'DedeUserID',
+  }),
+)
+
+/** wbi 密钥缓存（按北京日期换）。 */
+interface WbiKeys {
+  imgKey: string
+  subKey: string
+  day: string
+}
+
+/** 最近一次 nav 里读到的登录信息，给 `/status` 展示用。 */
+export interface NavInfo {
+  loggedIn: boolean
+  uname: string
+  mid: number
+  /** nav 的业务码：未登录是 -101，但这不代表请求失败。 */
+  code: number | null
+}
+
+/** getJson/getWbi/postForm 的公共可选项。 */
+type CallOpts = Omit<RawOpts, 'method' | 'body'>
+
+export interface BiliClientOptions {
+  cookies?: Cookies | null
+  logger?: (msg: string) => void
+}
 
 /**
  * 有状态的 B 站客户端。同一实例复用一个 cookie 罐，wbi 密钥按天缓存。
  * 所有方法要么返回数据，要么抛 BiliError（带 b 站业务码），调用方不必再判 code。
  */
 export class BiliClient {
-  #jar = new Map()
-  #wbi = null // { imgKey, subKey, day }
-  #log
+  #jar = new Map<string, string>()
+  #wbi: WbiKeys | null = null // { imgKey, subKey, day }
+  #log: (msg: string) => void
+  /** `wbiKeys()` 成功之后才有值。 */
+  navInfo: NavInfo | null = null
 
-  constructor({ cookies, logger } = {}) {
+  constructor({ cookies, logger }: BiliClientOptions = {}) {
     this.#log = typeof logger === 'function' ? logger : () => {}
     if (cookies && typeof cookies === 'object') this.setCookies(cookies)
   }
 
-  get cookieHeader() {
+  get cookieHeader(): string {
     return [...this.#jar].map(([k, v]) => `${k}=${v}`).join('; ')
   }
 
   /** 只保留 b 站真正用得上的四个凭证键（小写），其余（如 b_nut）不进凭证文件。 */
-  static pickCredentials(cookies) {
-    const out = {}
+  static pickCredentials(cookies: Cookies | null | undefined): Cookies | undefined {
+    const out: Cookies = {}
     for (const [key, name] of COOKIE_ALIAS) {
       const v = cookies?.[key] ?? cookies?.[name]
       if (v) out[key] = String(v)
@@ -99,7 +160,7 @@ export class BiliClient {
    * 而凭证文件里存的是小写键（pickCredentials 的输出），所以进来时必须映射回官方名，
    * 否则「扫码成功 → 读字幕/评论仍然像游客」——而且一路不报错，特别难查。
    */
-  setCookies(cookies) {
+  setCookies(cookies: Cookies | null | undefined): void {
     const alias = COOKIE_ALIAS
     for (const [k, v] of Object.entries(cookies || {})) {
       if (v == null || v === '') continue
@@ -107,23 +168,22 @@ export class BiliClient {
     }
   }
 
-
-  get cookies() {
+  get cookies(): Cookies {
     return Object.fromEntries(this.#jar)
   }
 
-  get csrf() {
+  get csrf(): string {
     return this.#jar.get('bili_jct') || ''
   }
 
-  get loggedIn() {
+  get loggedIn(): boolean {
     return Boolean(this.#jar.get('SESSDATA'))
   }
 
-  #absorb(res) {
+  #absorb(res: Response): Response {
     const list = typeof res.headers.getSetCookie === 'function' ? res.headers.getSetCookie() : []
     for (const c of list) {
-      const pair = c.split(';')[0]
+      const pair = c.split(';')[0]!
       const i = pair.indexOf('=')
       if (i > 0) {
         const k = pair.slice(0, i).trim()
@@ -136,7 +196,8 @@ export class BiliClient {
     return res
   }
 
-  async raw(url, { method = 'GET', headers, body, redirect, timeoutMs } = {}) {
+  async raw(url: string, opts: RawOpts = {}): Promise<Response> {
+    const { method = 'GET', headers, body, redirect, timeoutMs } = opts
     // 凭证只发给 bilibili.com。字幕正文在 aisubtitle.hdslb.com 这个 CDN 上，
     // 浏览器也不会把 bilibili.com 的 cookie 发到 *.hdslb.com，我们照做。
     // （解析不出域名时按 api.bilibili.com 处理：所有调用点给的都是绝对 URL。）
@@ -166,15 +227,20 @@ export class BiliClient {
     return this.#absorb(res)
   }
 
-  /** 无 wbi 的 JSON 接口（GET）。opts.tolerate=true 时返回信封而不是抛错。 */
-  async getJson(url, params, opts) {
-    const q = params ? `?${new URLSearchParams(params)}` : ''
+  /** 无 wbi 的 JSON 接口（GET）：不 tolerate 时直接返回 data，失败抛 BiliError。 */
+  getJson<T = unknown>(url: string, params?: Params | null, opts?: CallOpts & { tolerate?: false }): Promise<T>
+  /** tolerate=true：返回信封（`{ok,code,message,data}`），不抛业务错。 */
+  getJson(url: string, params: Params | null | undefined, opts: CallOpts & { tolerate: true }): Promise<Envelope>
+  async getJson(url: string, params?: Params | null, opts?: CallOpts & { tolerate?: boolean }): Promise<unknown> {
+    const q = params ? `?${new URLSearchParams(params as Record<string, string>)}` : ''
     const { tolerate, ...rest } = opts || {}
     return this.#json(await this.raw(url + q, { method: 'GET', ...rest }), url, tolerate)
   }
 
   /** 需要 wbi 签名的 GET。 */
-  async getWbi(url, params, opts) {
+  getWbi<T = unknown>(url: string, params?: Params | null, opts?: CallOpts & { tolerate?: false }): Promise<T>
+  getWbi(url: string, params: Params | null | undefined, opts: CallOpts & { tolerate: true }): Promise<Envelope>
+  async getWbi(url: string, params?: Params | null, opts?: CallOpts & { tolerate?: boolean }): Promise<unknown> {
     const { imgKey, subKey } = await this.wbiKeys()
     const q = signWbi(params || {}, imgKey, subKey)
     const { tolerate, ...rest } = opts || {}
@@ -182,8 +248,10 @@ export class BiliClient {
   }
 
   /** 表单 POST（b 站写操作一律带 csrf=bili_jct）。 */
-  async postForm(url, data, opts) {
-    const body = new URLSearchParams({ ...data, csrf: this.csrf })
+  postForm<T = unknown>(url: string, data: Params, opts?: CallOpts & { tolerate?: false }): Promise<T>
+  postForm(url: string, data: Params, opts: CallOpts & { tolerate: true }): Promise<Envelope>
+  async postForm(url: string, data: Params, opts?: CallOpts & { tolerate?: boolean }): Promise<unknown> {
+    const body = new URLSearchParams({ ...(data as Record<string, string>), csrf: this.csrf })
     // ⚠️ headers 要从 opts 里单独摘出来再合并：写成 `...rest` 会整个顶掉 Content-Type，
     // 表单就发成了无类型的 body（B 站按空表单处理，症状是「评论发出去但没内容」）。
     const { tolerate, headers, ...rest } = opts || {}
@@ -199,18 +267,18 @@ export class BiliClient {
     )
   }
 
-  async #json(res, url, tolerate) {
+  async #json(res: Response, url: string, tolerate?: boolean): Promise<unknown> {
     const text = await res.text()
-    let env
+    let env: { code?: number; message?: string; data?: unknown; result?: unknown }
     try {
-      env = JSON.parse(text)
+      env = JSON.parse(text) as typeof env
     } catch {
       if (tolerate) return { ok: false, code: res.status, message: 'non-json', data: null, raw: text.slice(0, 300) }
       throw new BiliError(`${url} 返回的不是 JSON（HTTP ${res.status}）：${text.slice(0, 120)}`, res.status)
     }
-    const code = env.code
+    const code = typeof env.code === 'number' ? env.code : null
     if (tolerate) {
-      return { ok: code === 0, code, message: env.message || '', data: env.data ?? env.result ?? null }
+      return { ok: code === 0, code, message: env.message || '', data: env.data ?? env.result ?? null } satisfies Envelope
     }
     if (code !== 0) throw new BiliError(`${code} ${env.message || ''} @ ${url}`, code)
     return env.data ?? env.result ?? null
@@ -220,18 +288,18 @@ export class BiliClient {
    * nav 一次拿到 wbi 密钥；密钥每天凌晨换，缓存到「北京日期」变化为止。
    * 注意：未登录时 nav 的业务码是 -101，但 wbi_img 照样在 data 里 —— 所以必须 tolerate。
    */
-  async wbiKeys(force = false) {
+  async wbiKeys(force = false): Promise<WbiKeys> {
     const day = new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10)
     if (!force && this.#wbi?.day === day) return this.#wbi
     const env = await this.getJson('https://api.bilibili.com/x/web-interface/nav', undefined, { tolerate: true })
-    const nav = env?.data
-    const pick = (u) => String(u || '').slice(String(u || '').lastIndexOf('/') + 1).split('.')[0]
+    const nav = env.data as { isLogin?: boolean; uname?: string; mid?: number; wbi_img?: { img_url?: string; sub_url?: string } } | null
+    const pick = (u?: string): string => String(u || '').slice(String(u || '').lastIndexOf('/') + 1).split('.')[0]!
     const imgKey = pick(nav?.wbi_img?.img_url)
     const subKey = pick(nav?.wbi_img?.sub_url)
     if (!imgKey || !subKey) {
-      throw new BiliError(`拿不到 wbi 密钥（nav ${env?.code} ${env?.message}）`)
+      throw new BiliError(`拿不到 wbi 密钥（nav ${env.code} ${env.message}）`)
     }
-    this.nav = {
+    this.navInfo = {
       loggedIn: Boolean(nav?.isLogin),
       uname: nav?.uname || '',
       mid: nav?.mid || 0,
@@ -242,9 +310,12 @@ export class BiliClient {
   }
 
   /** 无 cookie 时补一个 buvid3，能显著降低风控概率。 */
-  async ensureBuvid() {
-    if (this.#jar.get('buvid3')) return this.#jar.get('buvid3')
-    const d = await this.getJson('https://api.bilibili.com/x/frontend/finger/spi')
+  async ensureBuvid(): Promise<string> {
+    if (this.#jar.get('buvid3')) return this.#jar.get('buvid3')!
+    const d = await this.getJson<{ b_3?: string; b_4?: string }>(
+      'https://api.bilibili.com/x/frontend/finger/spi',
+      undefined,
+    )
     if (d?.b_3) this.#jar.set('buvid3', d.b_3)
     if (d?.b_4) this.#jar.set('buvid4', d.b_4)
     return this.#jar.get('buvid3') || ''

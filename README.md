@@ -1,6 +1,6 @@
 # dsh-bili-surfer
 
-给 DeepSeek Harness 的「自主刷 B 站」插件。**纯 JS、零安装**：没有 Python、没有 venv、没有 MCP 子进程、不占端口。
+给 DeepSeek Harness 的「自主刷 B 站」插件。**源码是 TypeScript，编译成零依赖的 JS 跑**：没有 Python、没有 venv、没有 MCP 子进程、不占端口。仓库里已经带着编译好的 JS，装上就能用，不用先 build。
 
 它做四件事：
 
@@ -17,7 +17,7 @@
 
 | | dsh-bili-scroll | dsh-bili-surfer |
 |---|---|---|
-| 依赖 | Python + venv + uv + 自建 MCP stdio 服务 | 无，纯 `node:fetch` |
+| 依赖 | Python + venv + uv + 自建 MCP stdio 服务 | 无，纯 `node:fetch`（源码 TS，产物零依赖） |
 | 首次可用 | 先装几分钟环境 | 装完就能跑 |
 | 登录 | Python qrcode 渲染 | 纯 JS 扫码，浏览器里直接出二维码 |
 | 内容来源 | 字幕（读不到就本地 Whisper 转写） | 字幕 → AI 摘要 → 弹幕 → 简介 |
@@ -87,33 +87,45 @@ bundle（插件挂上了、路由通了，跑的却还是挂载那一刻的旧�
 
 ## 开发
 
+源码在 `src/`（TypeScript）；`index.js`、`lib/*.js`、`client.js` 是**编译产物** —— dsh 加载的就是这些产物，所以改了 `src/` 一定要 build，并把产物一起提交（`selfcheck.mjs` 的 D 段会拿 mtime 兜底：产物比源码旧就红）。
+
 ```bash
-node selfcheck.mjs        # 离线预检：假 ctx 挂载宿主、假 DOM 挂载设置页、源码不变式断言（含写路径打桩）
-node selfcheck.live.mjs   # 联网冒烟：真打 b 站接口，验证 lib/
+pnpm install              # 只有 typescript 与 @types/node（devDependencies）
+pnpm run build            # tsc 两次：宿主 + lib 就地编译，再单独编 client（经典脚本语义）
+pnpm run typecheck        # 只查类型，不落盘
+
+node selfcheck.mjs        # 离线预检：假 ctx 挂载宿主、假 DOM 挂载设置页、源码不变式（含写路径打桩）——94 项
+node selfcheck.live.mjs   # 联网冒烟：真打 b 站接口
 node selfcheck.round.mjs  # 联网跑一轮，报告打到临时目录
-node selfcheck.host.mjs   # 对着**正在跑的** dsh 验设置页契约（重启后跑这个）
+node selfcheck.host.mjs   # 对着正在跑的 dsh 验设置页契约（重启后跑这个）——默认 43 项
 ```
 
-`selfcheck.host.mjs` 只读，默认不打 B 站、不改配置、不跑轮。两个可选的加法：
-`--login` 真打一次扫码链（要一个二维码 → 和插件自己的编码器逐格比对 → 轮询必须停在
-「未扫」，因为没人会去扫 → 退出登录），`--run` 真跑一轮。它会从 `client.js` 源码里
-反推设置页真正读的字段名，再逐个到活着的 `/status` 里对账 —— 这样
-「源码改了但进程还是旧代码」不会伪装成「设置页莫名为空」。
+`selfcheck.host.mjs` 只读，默认不打 B 站、不改配置、不跑轮。开头那 4 项「本机状态目录 ×
+本地代码」连活进程都不需要（DSH 没起来也能跑），查的是「升级后老装机的那份状态还能不能
+被现在的代码读懂」。两个可选的加法：`--login` 真打一次扫码链（要一个二维码 → 和插件自己
+的编码器逐格比对 → 轮询必须停在「未扫」，因为没人会去扫 → 退出登录），`--run` 真跑一轮。
+它会从 `client.js` 源码里反推设置页真正读的字段名，再逐个到活着的 `/status` 里对账 ——
+这样「源码改了但进程还是旧代码」不会伪装成「设置页莫名为空」。**端口不用管**：脚本自己
+挨个试（5299 / 19387 / 3000 / 8080），也可以用 `--port` 或 `DSH_WEB_PORT` 指定。
 
 ⚠️ **改完代码必须重启 dsh。** bundle 的 patch 只在启动时读；profile 变化时 DSH 会热挂
 新 bundle（所以「设置页出现了刷B站」不等于「跑的是你刚改的代码」——Node 的模块缓存不会
-跟着文件走）。判断依据有两个：`node selfcheck.host.mjs` 第一条会明说；设置页「构建」那一行
-显示的是**加载时**算出来的源码指纹（`/status` 的 `build`），和磁盘上现算的对不上就是旧构建。
+跟着文件走）。判断依据有两个：`node selfcheck.host.mjs` 会明说；设置页「构建」那一行
+显示的是**加载时**算出来的产物指纹（`/status` 的 `build`），和磁盘上现算的对不上就是旧构建。
+只改了 `client.js`（UI）的话刷新页面就够，不用重启。
 
-`lib/` 分层：
+`src/` 分层：
 
 | 文件 | 职责 |
 |---|---|
-| `lib/net.mjs` | cookie 罐、wbi 签名、统一 UA/Referer、业务码 → 异常 |
-| `lib/bili.mjs` | 领域动作：搜索/详情/字幕/摘要/弹幕/评论/登录/发评论/可见性核查 |
-| `lib/state.mjs` | 家目录解析、配置白名单化、JSON 读写、日期 |
-| `lib/surf.mjs` | 一轮的编排：候选打分 → 读内容 → 出报告 → 可选评论 |
-| `lib/report.mjs` | 报告与台账的纯格式化 |
+| `src/lib/net.ts` | cookie 罐、wbi 签名、统一 UA/Referer、超时、业务码 → 异常 |
+| `src/lib/bili.ts` | 领域动作：搜索/详情/字幕/摘要/弹幕/评论/登录/发评论/可见性核查 |
+| `src/lib/state.ts` | 家目录解析、配置白名单、`FIELDS`（设置项表唯一真源）、JSON 读写、日期 |
+| `src/lib/surf.ts` | 一轮的编排：候选打分 → 读内容 → 出报告 → 可选评论 |
+| `src/lib/report.ts` | 报告与台账的纯格式化 |
+| `src/lib/qr.ts` | 手写二维码编码器（零依赖） |
+| `src/lib/tools.ts` | 极简 `defineTool`（替代 `@deepseek-ai/*`） |
+| `src/index.ts` / `src/client.ts` | 宿主插件 / 设置页（编译成 `index.js` / `client.js`） |
 
 ## 许可
 

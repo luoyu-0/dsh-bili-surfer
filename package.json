@@ -9,12 +9,19 @@
     "./client": "./client.js",
     "./package.json": "./package.json"
   },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.client.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "selfcheck": "node selfcheck.mjs",
+    "check": "pnpm run build && node selfcheck.mjs"
+  },
   "files": [
     "index.js",
     "client.js",
     "cordis.patch.yml",
     "lib",
     "prompts",
+    "src",
     "README.md",
     "AGENTS.md",
     "LICENSE"
@@ -37,5 +44,9 @@
     }
   },
   "license": "MIT",
-  "private": true
+  "private": true,
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2"
+  }
 }

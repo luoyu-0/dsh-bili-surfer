@@ -4,25 +4,33 @@
 
 ## 这个插件是什么
 
-DSH 的一个 bundle 插件：手动触发一轮「刷 B 站」——搜索/挑片/读字幕或弹幕/写 Markdown 日报，可选发一条评论并 @ 用户。**纯 JS，零安装，无 Python/venv/MCP/定时器。**
+DSH 的一个 bundle 插件：手动触发一轮「刷 B 站」——搜索/挑片/读字幕或弹幕/写 Markdown 日报，可选发一条评论并 @ 用户。**源码是 TypeScript，编译成零依赖的 JS 跑（不需要 Python/venv/MCP/定时器）。**
 
 ## 目录约定
 
 ```
-index.js            宿主插件（cordis）：Config、工具注册、HTTP 路由、注入客户端
-client.js           设置页（非 ESM，window.__ModuleLoader__.load 自注册）
+src/index.ts        宿主插件（cordis）源码：工具注册、HTTP 路由、一轮的锁
+src/client.ts       设置页源码（经典脚本，编译成 client.js；不许有 import/export）
+src/lib/types.ts    全插件的类型（SurfConfig / Item / RoundResult / FieldMeta …）
+src/lib/net.ts      HTTP 底座：cookie 罐 / wbi 签名 / 业务码 → 异常
+src/lib/bili.ts     B 站领域动作（不碰磁盘）
+src/lib/state.ts    家目录、配置白名单化、JSON 读写、日期、FIELDS（设置项表就这一份）
+src/lib/surf.ts     一轮编排（不碰 DSH）
+src/lib/report.ts   报告与台账格式化（纯函数）
+src/lib/tools.ts    极简 defineTool（替代 @deepseek-ai 的 defineTool）
+index.js lib/*.js client.js   ← **编译产物**：dsh 真正加载的就是它们（手改会被下次 build 覆盖）
 cordis.patch.yml    bundle 插入 profile 配置树；id 必须叫 bili-surfer
-lib/net.mjs         HTTP 底座：cookie 罐 / wbi 签名 / 业务码 → 异常
-lib/bili.mjs        B 站领域动作（不碰磁盘）
-lib/state.mjs       家目录、配置白名单化、JSON 读写、日期
-lib/surf.mjs        一轮编排（不碰 DSH）
-lib/report.mjs      报告与台账格式化（纯函数）
 prompts/surfer.md   冲浪章程（纪律/边界/评论文风/底线产出）
+tsconfig.json       类型检查（宿主 + lib；client 另算，因为它不是 ESM）
+tsconfig.build.json 宿主半端产物：就地编译（src/index.ts → index.js，src/lib/x.ts → lib/x.js）
+tsconfig.client.json 客户端半端产物（经典脚本语义，src/client.ts → client.js）
 selfcheck.mjs       离线预检（假 ctx + 假 DOM + 源码不变式，含写路径打桩）
 selfcheck.live.mjs  联网冒烟（真打接口）
 selfcheck.round.mjs 联网跑一整轮（临时目录）
 selfcheck.host.mjs  对着活着的 dsh 进程验契约（`--login` 顺带打一次扫码链，`--run` 真跑一轮）
 ```
+
+构建就一句：`pnpm run build`（= 两次 `tsc`，产物就地落在 `index.js` / `lib/*.js` / `client.js`，所以 `package.json` 的 `main`/`exports` 一个都不用改 —— dsh 也是按这些路径加载的）。**没有打包器、没有运行时依赖**，`node_modules` 里只有 `typescript` 和 `@types/node`（devDependencies）。
 
 **命名必须统一为 `bili-surfer`**：插件 id、设置命名空间、状态目录名、客户端 slot id。参考实现 dsh-bili-scroll 在这三处有三个不同的名字（`bili-scroll`/`bili-duty`/`bili-duty`），设置页因此对不上 entry —— 别复制这个坑。
 
@@ -30,15 +38,15 @@ selfcheck.host.mjs  对着活着的 dsh 进程验契约（`--login` 顺带打一
 
 1. **不要裸 import `@deepseek-ai/*`。** 桌面 profile 用 `autoInstallPeers: false`，optional peer 根本不会装；一旦顶层 import 失败，**整条插件都不激活**（设置页直接不出现，日志只有一句 `1 entry did not activate`）。所以：宿主依赖要么从宿主树里解析，要么不用（本插件不需要 schemastery 也能跑，`Config` 拿不到就退化成 `undefined`）。
 2. **`apply(ctx, config)` 里的 config 不可信。** 字段可能是对象、函数、`null`。一律过 `normalize()` 按默认值类型过滤，否则一个类型不符的值会在使用时抛异常；**在定时器/回调里抛异常会带走整个 dsh 进程**。
-3. **`ctx.get('dshHomePath')` 是函数不是字符串**（`p()` 返回路径）。当字符串用会得到「函数源码」拼出来的路径 → `mkdir ENOENT` → 插件不激活。两种形状都要兼容，见 `lib/state.mjs:resolveHome`。
+3. **`ctx.get('dshHomePath')` 是函数不是字符串**（`p()` 返回路径）。当字符串用会得到「函数源码」拼出来的路径 → `mkdir ENOENT` → 插件不激活。两种形状都要兼容，见 `src/lib/state.ts:resolveHome`。
 4. **工具返回值必须是 lossless JSON**（不能有 class 实例/函数/循环引用），**每个 `type:'object'` 的 schema 节点必须写 `additionalProperties`**。两条都是硬失败。
 5. **长活儿不许 await 在请求路径上。** 但本插件没有长活儿：一轮 5 条视频大约 5–30 秒，属于可等待范围。**如果以后加了转写/下载，必须改成 spawn + 日志 + 轮询**。
 6. **落盘只写 `<DSH_HOME>/bili-surfer/`。** 插件包目录可能是只读的（也是发布目录）。
 7. **一轮里的任何异常都不能逃逸到宿主。** `runRound` 的每一步都单独 try/catch，最外层再兜一次；失败也要留下报告与台账（章程「底线产出」）。
 8. **`settings.register` 的 entry id 必须等于命名空间名**，且至少要有一个字段带 `volatile`，否则 `settings.update()` 会抛 `has no volatile fields`。
-9. **改完必须重启 dsh。** bundle 的 patch 只在启动时读，profile 层不热重载。但别指望「没重启 ⇒ 插件不存在」：实测 DSH **会**热挂新加进 profile 的 bundle（插件挂上了、路由 200 了，跑的还是挂载那一刻的旧代码）。所以判断依据是 `/status` 的 `build` —— 它是**加载时**算的源码指纹（`lib/state.mjs:buildStamp`，8 位；只盖宿主那一半：index.js + lib/*.mjs + package.json），`node selfcheck.host.mjs` 会拿它跟磁盘上现算的比，不一致就是旧构建。**client.js 故意不进指纹**：浏览器是页面加载时现取它的，改 UI 只需刷新页面，为它重启整个 dsh 不值。踩过好几次：靠「缺不缺某个字段」猜旧代码，猜得很费劲。
+9. **改完必须重启 dsh。** bundle 的 patch 只在启动时读，profile 层不热重载。但别指望「没重启 ⇒ 插件不存在」：实测 DSH **会**热挂新加进 profile 的 bundle（插件挂上了、路由 200 了，跑的还是挂载那一刻的旧代码）。所以判断依据是 `/status` 的 `build` —— 它是**加载时**算的源码指纹（`src/lib/state.ts:buildStamp`，8 位；只盖宿主那一半：index.js + lib/*.mjs + package.json），`node selfcheck.host.mjs` 会拿它跟磁盘上现算的比，不一致就是旧构建。**client.js 故意不进指纹**：浏览器是页面加载时现取它的，改 UI 只需刷新页面，为它重启整个 dsh 不值。踩过好几次：靠「缺不缺某个字段」猜旧代码，猜得很费劲。
 10. **凭证只在 `<home>/credential.json`**，永远不进日志、不进报告、不进 HTTP 响应。工具结果也不许带 cookie（`bili_surf_login` 的 poll 分支只回 `saved/loggedIn`）。
-11. **cookie 名大小写敏感。** 盘上存小写（`sessdata`/`bili_jct`/`buvid3`/`dedeuserid`），发给 B 站必须用官方名 `SESSDATA`/`bili_jct`/`buvid3`/`DedeUserID`。`lib/net.mjs` 的 `COOKIE_ALIAS` 负责双向映射，**读写都要过它**（`setCookies` 进罐子、`pickCredentials` 从二维码响应的 Set-Cookie 出来）。踩过一次：小写直接进罐子 → `cli.loggedIn` 永远 false、Cookie 头里的名字 B 站不认 → **扫码登录成功，但字幕/热评/发评论全部静默降级成游客**。参考实现也因此手拼 Cookie 头（`D:\everything\dsh\_ref\dsh-bili-scroll\lib\verify.mjs:56`）。
+11. **cookie 名大小写敏感。** 盘上存小写（`sessdata`/`bili_jct`/`buvid3`/`dedeuserid`），发给 B 站必须用官方名 `SESSDATA`/`bili_jct`/`buvid3`/`DedeUserID`。`src/lib/net.ts` 的 `COOKIE_ALIAS` 负责双向映射，**读写都要过它**（`setCookies` 进罐子、`pickCredentials` 从二维码响应的 Set-Cookie 出来）。踩过一次：小写直接进罐子 → `cli.loggedIn` 永远 false、Cookie 头里的名字 B 站不认 → **扫码登录成功，但字幕/热评/发评论全部静默降级成游客**。参考实现也因此手拼 Cookie 头（`D:\everything\dsh\_ref\dsh-bili-scroll\lib\verify.mjs:56`）。
 12. **`saveCredential(dir, null)` 是删文件，不是写一个 `null`。** 退出登录要真把 cookie 从盘上抹掉。
 13. **别在轮询路由里直连网络。** 设置页每 5 秒打一次 `GET /status`，而 `/status` 要显示登录名 → `whoami` 必须带 TTL 缓存（`index.js` 的 `ME_TTL = 60_000` + `forgetMe()`，登录/退出时作废）。否则用户开着设置页就等于每分钟打 12 次 B 站。
 14. **设置页读的是 `/status` 的顶层字段**（`st.enabled`、`st.config`、`st.logTail`、`st.login`…）。开关只放进 `config.enabled` 会让徽标永远显示「已停用」——两处都要有。
@@ -46,11 +54,12 @@ selfcheck.host.mjs  对着活着的 dsh 进程验契约（`--login` 顺带打一
 16. **`dryRun` 是「真演练」，不是「跳过」。** 评论照样让助手写、照样过 `normalizeComment`、照样记进报告（**本轮评论**：演练）与台账（备注「演练（没真发）」），只压住最后那次 `sendComment`。如果 dryRun 直接跳过整段，设置页开了 `autoComment` 也看不出任何差别，用户就没法在不发帖的前提下验这条链。
 17. **扫码状态在 `data.data.code`，外层的 `code` 恒为 0。** passport 的 `x/passport-login/web/qrcode/poll` 回包是两层的：外层 `code:0` 只说「这次请求本身成功」，真正的扫码状态在内层 `data.code`（`86101` 未扫 / `86090` 已扫待确认 / `86038` 过期 / `0` 成功）。读外层就会**一按「生成二维码」就报登录成功**，而且此后每次读字幕/热评/发评论都静默降级成游客。踩过一次 —— 离线 stub 当时写的是错形状，62 项全绿也没拦住，是「对着活着的 dsh 打真实 passport」才抓到的。同一处还有第二个坑：`pickCredentials` 曾返回 `{}`（真值！），于是 `if (credentials)` 判定为「拿到凭证了」；现在没有 `sessdata` 一律返回 `undefined`，两处闸门都写成 `r.credentials?.sessdata`。
 18. **写 stub 之前先用真接口打一遍，把回包原样抄下来。** 尤其是「有没有 `code` 信封」这种一眼看不出的事（字幕正文那个接口就没有信封）。stub 的形状错了，整套自检会变成一场自我安慰。
-19. **比 rpid 一律用 `rpid_str`，别用 `rpid`。** 回包里 `rpid` 是 JSON number，而 rpid 是 int64 —— 大数会被 `JSON.parse` 丢精度（`9007199254740993` → `9007199254740992`），拿它比对就会「刚发的评论明明在列表里，却被判成不可见」。`lib/bili.mjs` 的 `sameRpid()` 优先取 `rpid_str`，两个分支共用；`sendComment` 的返回值也一样。
-20. **一行日志只能有一个人写。** `lib/surf.mjs` 的 `runRound` 注入了 `log` 就用注入的那个（宿主那份会同时写 `surf.log` 与 dsh 日志），**没有再自己落盘**；两边都写的话每一行都会在 `surf.log` 里出现两次，而且格式不同（宿主的 `2026-10-16T12:49:59.658Z  已挂载` 与 surf.mjs 旧版的 `[2026-10-16T13:34:19.365Z] 扫码登录成功`）。踩过一次 —— 是**以读者身份读真日志**才看出来的，离线用例当时全绿（它只检查「日志里有这句话」，不检查「出现了几次」）。
+19. **比 rpid 一律用 `rpid_str`，别用 `rpid`。** 回包里 `rpid` 是 JSON number，而 rpid 是 int64 —— 大数会被 `JSON.parse` 丢精度（`9007199254740993` → `9007199254740992`），拿它比对就会「刚发的评论明明在列表里，却被判成不可见」。`src/lib/bili.ts` 的 `sameRpid()` 优先取 `rpid_str`，两个分支共用；`sendComment` 的返回值也一样。
+20. **一行日志只能有一个人写。** `src/lib/surf.ts` 的 `runRound` 注入了 `log` 就用注入的那个（宿主那份会同时写 `surf.log` 与 dsh 日志），**没有再自己落盘**；两边都写的话每一行都会在 `surf.log` 里出现两次，而且格式不同（宿主的 `2026-10-16T12:49:59.658Z  已挂载` 与 surf.mjs 旧版的 `[2026-10-16T13:34:19.365Z] 扫码登录成功`）。踩过一次 —— 是**以读者身份读真日志**才看出来的，离线用例当时全绿（它只检查「日志里有这句话」，不检查「出现了几次」）。
 21. **章程（`prompts/surfer.md`）是给用户改的，升级不能静默消失。** `ensureFiles` 遇到「家目录那份和插件里的不一样」时**不覆盖**，而是把新版落成 `<名字>.new` 并在挂载日志里说一句（`{to, action}` 里的 `pending`）；内容一致才算无事发生。`bili_surf_status` 回的 `charterFile` 就是它的位置，`bili_surf_comment` 的描述里点名让助手先读「评论文风」——**别让章程躺在家里没人看**。
-22. **每个请求都要有超时，锁要能自己放手。** `lib/net.mjs` 的 `raw()` 一律带 `AbortSignal.timeout`（默认 15s）——没有它，一个黑洞连接（TCP 建上了但不回）能把整轮永久挂住：工具刻意不声明 `timeoutMs`、`/run` 又是后台跑的，用户只会看到设置页永远显示「正在跑」，唯一出路是重启 dsh。同理 `index.js` 的锁有 10 分钟兜底（`ROUND_MAX_MS` + `releaseStale()`），**两个忙判定入口（`doRound` 与 `POST /run`）都必须先 `releaseStale()` 再判忙**。写用例时注意：`AbortSignal.timeout` 的定时器是 **unref** 的，只有它一个待办时 node 会在触发之前就退出（`Detected unsettled top-level await`），要自己留个 `setTimeout` 撑着事件循环。
+22. **每个请求都要有超时，锁要能自己放手。** `src/lib/net.ts` 的 `raw()` 一律带 `AbortSignal.timeout`（默认 15s）——没有它，一个黑洞连接（TCP 建上了但不回）能把整轮永久挂住：工具刻意不声明 `timeoutMs`、`/run` 又是后台跑的，用户只会看到设置页永远显示「正在跑」，唯一出路是重启 dsh。同理 `src/index.ts` 的锁有 10 分钟兜底（`ROUND_MAX_MS` + `releaseStale()`），**两个忙判定入口（`doRound` 与 `POST /run`）都必须先 `releaseStale()` 再判忙**。写用例时注意：`AbortSignal.timeout` 的定时器是 **unref** 的，只有它一个待办时 node 会在触发之前就退出（`Detected unsettled top-level await`），要自己留个 `setTimeout` 撑着事件循环。
 23. **检查脚本结尾不许 `process.exit()`。** 只要这个进程打过真 HTTP（`selfcheck.host.mjs` / `selfcheck.live.mjs`），退出时和 undici 关 keep-alive socket 抢时序就会撞上 libuv 断言 `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING), file src\win\async.c, line 76`，退出码变成 `-1073740791`（0xC0000409），**恰好把「33 项过了、6 项没过」这种人话淹进崩溃信息里**（实测：`process.exit(1)` 4 次崩 3 次，只设 `process.exitCode` 让事件循环自己排空 4 次全干净；`Connection: close`、先 `dispatcher.close()` 都救不了）。所以三个脚本都改成「算出一个 code → `process.exitCode = code` → 自然结束」；提前退出（参数校验那几处 `process.exit(2)`，发生在联网之前）才允许保留。
+24. **源码是 TS、跑的是编译产物 —— 改了 `src/` 就必须 `pnpm run build`，产物跟着提交。** 这条最阴的地方是「一声不响」：dsh 加载的 `index.js` / `lib/*.js` / `client.js` 全是产物，忘 build 就继续跑旧代码，而 `/status` 的 `build` 指纹**算的也是产物** —— 它会如实地告诉你「没变」。所以 `selfcheck.mjs` D 段拿 mtime 兜底（每个 `src/**/*.ts` 对应的产物必须存在且不比源码旧），并且 `lib/` 里一旦出现 `.mjs` 就红（两套实现并存 = 改一处、跑另一处）。写用例时 import 的是**产物**（`./lib/state.js`），别指向 `src/` —— 要验的就是真正跑起来的那份。
 
 ## B 站接口的真实行为（实测，别再踩）
 
@@ -95,7 +104,9 @@ selfcheck.host.mjs  对着活着的 dsh 进程验契约（`--login` 顺带打一
 
 ## 评审清单（提交前自查）
 
-- [ ] `node selfcheck.mjs` 全绿
+- [ ] `pnpm run build` 跑过，**产物跟着提交**（`index.js` / `lib/*.js` / `client.js`）
+- [ ] `pnpm run typecheck` 干净（`tsconfig.json` 管宿主 + lib；client 走 `tsconfig.client.json`）
+- [ ] `node selfcheck.mjs` 全绿（现在 94 项）
 - [ ] `node selfcheck.live.mjs` 全绿（需要联网）
 - [ ] 新增的每个 `type:'object'` schema 都有 `additionalProperties`
 - [ ] 没有顶层 `@deepseek-ai/*` import
@@ -106,7 +117,7 @@ selfcheck.host.mjs  对着活着的 dsh 进程验契约（`--login` 顺带打一
 - [ ] 新写文件都落在 `stateDir`（或预检脚本 `--dir` 指定的目录）里，不在插件包目录
 - [ ] **只有登录后才走得通的链条要有 stub fetch 的自检用例**（字幕链、发评论）：游客态验不了它们，靠人肉试就是等用户重启后才发现。形状照真响应造（尤其是「有没有 `code` 信封」这种一眼看不出的事）。
 - [ ] **写路径的三道闸都要有用例**（`selfcheck.mjs` E 段）：`autoComment` 关 / `mentionName` 空 / `dryRun` 开 —— 三种情况下 `POST /x/v2/reply/add` 的次数都必须是 0。
-- [ ] 新增的网络调用都走 `lib/net.mjs`（`raw()`/`getJson()`/`getWbi()`/`postForm()`），**不要直接 `fetch`**：这些入口自带 15s 超时、cookie 域名判断与业务码转异常；裸 `fetch` 会把「黑洞连接挂死整轮」放回来。
+- [ ] 新增的网络调用都走 `src/lib/net.ts`（`raw()`/`getJson()`/`getWbi()`/`postForm()`），**不要直接 `fetch`**：这些入口自带 15s 超时、cookie 域名判断与业务码转异常；裸 `fetch` 会把「黑洞连接挂死整轮」放回来。
 - [ ] 重启后先跑 `node selfcheck.host.mjs --login`（只读 + 扫码链），再在设置页手点一遍；它失败的那些就是用户重启后第一眼会看到的问题。**它开头那 4 项「本机状态目录 × 本地代码」不需要活进程、也不需要联网**（DSH 没起来也能跑）：查的是「升级后老装机的那份状态还能不能被现在的代码读懂」（配置里多了旧版本的键、`credential.json` 形状坏了、台账 `parseSeen` 与 `countSeen` 两个口径对不上）。默认只读跑是 **43 项**（加 `--login` / `--run` 会更多）。
 - [ ] **真去调用一次工具**（`bili_surf_status` / `bili_surf_search` / `bili_surf_read` / `bili_surf_report`），别只信离线用例：踩过一次 —— 搜索条目时长全显示 `00:00`，离线 68 项全绿也没拦住，是调 `bili_surf_search` 才看见的（内部函数测得再细，也可能和「真正展示出去的那几个字段」差一层）。`selfcheck.mjs` 的 **C3 段**已经把「打桩真执行每个工具 + 断言返回形状 + 过一遍 `safe()`」自动化了（含 `slimItem` 的字段、报告落盘路径、评论三道闸），但 stub 抄的是**当时**的回包 —— 接口改了形状、或者新增了一个工具，还是得真调一次。
 - [ ] 跑完一轮后，把 `out/<日期>.md` **当一个读者那样读一遍**（不是只确认「有内容」）：踩过一次 —— 弹幕当摘录时，「内容摘录」和「弹幕在聊什么」是同一批话逐行重复；热评截断成半句话却没有省略号，读起来像是评论就这么短。这两条现在都有纯函数用例。

@@ -3,7 +3,7 @@
 //   node selfcheck.host.mjs                 # 只读检查（默认）
 //   node selfcheck.host.mjs --login         # 外加真打一次扫码链（start → 逐格比对 → poll → logout）
 //   node selfcheck.host.mjs --run           # 外加拿一轮（会真写报告与台账）
-//   node selfcheck.host.mjs --port 19387
+//   node selfcheck.host.mjs --port 5299
 //
 // 为什么要有这个：设置页脚本 client.js 只认识 /status 里的几个字段，而插件的路由
 // 只有「重启 dsh 后」才会换成新代码（模块缓存）—— 于是最容易出现的失效是
@@ -13,9 +13,9 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { DEFAULTS, HOME_SUBDIR, buildStamp, normalize, readJson, readText, resolveHome } from './lib/state.mjs'
-import { countSeen, parseSeen } from './lib/report.mjs'
-import { loadCredential } from './lib/surf.mjs'
+import { DEFAULTS, HOME_SUBDIR, buildStamp, normalize, readJson, readText, resolveHome } from './lib/state.js'
+import { countSeen, parseSeen } from './lib/report.js'
+import { loadCredential } from './lib/surf.js'
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url))
 const argv = process.argv.slice(2)
@@ -23,8 +23,32 @@ const argOf = (name, dflt) => {
   const i = argv.indexOf(name)
   return i >= 0 && argv[i + 1] ? argv[i + 1] : dflt
 }
-const PORT = Number(argOf('--port', process.env.DSH_WEB_PORT || 19387))
-const BASE = `http://127.0.0.1:${PORT}/api/bili-surfer`
+const PORT_ARG = argOf('--port', process.env.DSH_WEB_PORT || '')
+// 端口会跟着 DSH 版本变（实测 19387 → 5299，而且两个进程可能各占一个），所以没显式给
+// --port 时挨个试：谁答话就用谁。显式给了就只认那一个（别让脚本自己换目标）。
+const CANDIDATES = PORT_ARG ? [Number(PORT_ARG)] : [5299, 19387, 3000, 8080]
+let PORT = Number(PORT_ARG || CANDIDATES[0])
+let BASE = `http://127.0.0.1:${PORT}/api/bili-surfer`
+
+async function resolveBase() {
+  if (PORT_ARG) return
+  const tried = []
+  for (const p of CANDIDATES) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${p}/api/bili-surfer/status`, { signal: AbortSignal.timeout(1500) })
+      tried.push(`${p}${res.ok ? '✓' : `(${res.status})`}`)
+      if (res.ok) {
+        PORT = p
+        BASE = `http://127.0.0.1:${p}/api/bili-surfer`
+        if (p !== CANDIDATES[0]) console.log(`（端口自动探测：用 ${p}，试过 ${tried.join(' ')}）`)
+        return
+      }
+    } catch {
+      tried.push(`${p}✗`)
+    }
+  }
+  console.log(`（端口自动探测：${tried.join(' ')} 都没答话，仍按 ${PORT} 试）`)
+}
 const WITH_RUN = argv.includes('--run')
 const WITH_LOGIN = argv.includes('--login')
 
@@ -115,6 +139,7 @@ function printSummary() {
   }
 }
 
+await resolveBase()
 console.log(`\n── 活着的 DSH 上的 bili-surfer 契约（${BASE}）${'─'.repeat(12)}`)
 
 // 1) 插件在不在
@@ -208,7 +233,7 @@ if (!st) {
       '每行必须是等长 0/1 **字符串**（数字数组会让 canvas 全白）',
     )
     ok(!/sessdata|SESSDATA/i.test(start.text), '启动响应里不许出现凭证')
-    const { qrMatrix } = await import(new URL('./lib/qr.mjs', import.meta.url).href)
+    const { qrMatrix } = await import(new URL('./lib/qr.js', import.meta.url).href)
     const m = qrMatrix(url)
     eq(m.size, size, '矩阵尺寸要和插件自己算的一致')
     let diff = 0
