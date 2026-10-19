@@ -72,8 +72,12 @@ export interface VideoItem {
   [k: string]: unknown
 }
 
-/** 内容是「靠什么读到的」——报告里会写出来，读者据此判断可信度。 */
-export type ReadKind = '字幕' | 'AI 摘要' | '弹幕' | '仅简介'
+/**
+ * 一条内容是「靠什么读到的」——给**机器**看的标签（工具输出里的 `read`）。
+ * 报告里那行「内容摘录（字幕/AI 摘要/视频简介）」是另一套中文措辞，别混用：
+ * 这两个词表曾经各写一半，结果 `Item.read` 声明成中文、实际却写 `'desc'`。
+ */
+export type ReadSource = 'subtitle' | 'aiSummary' | 'danmaku' | 'desc'
 
 export interface SubtitleBlock {
   lan: string
@@ -121,7 +125,6 @@ export interface Item {
   tags?: string[]
   score?: number
   scoreText?: string
-  read?: ReadKind
   subtitle?: SubtitleBlock
   aiSummary?: AiSummaryBlock
   danmakuCount?: number

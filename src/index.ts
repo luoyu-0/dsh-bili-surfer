@@ -38,7 +38,7 @@ import {
 } from './lib/surf.js'
 import type { RoundOutcome } from './lib/surf.js'
 import { countSeen } from './lib/report.js'
-import type { Item, SurfConfig, SurfPaths } from './lib/types.js'
+import type { Item, ReadSource, SurfConfig, SurfPaths } from './lib/types.js'
 
 export const name = PLUGIN_ID
 export const inject = ['webServer', 'tools']
@@ -213,7 +213,7 @@ export function apply(ctx: PluginContext, config: unknown): void {
 
   /** 一轮跑完后交给助手的瘦身版条目（别把整篇字幕塞进对话上下文）。 */
   const slimItem = (it: Item, excerpt = 480) => {
-    const src = it.subtitle ? 'subtitle' : it.aiSummary ? 'aiSummary' : it.danmakuText ? 'danmaku' : 'desc'
+    const src: ReadSource = it.subtitle ? 'subtitle' : it.aiSummary ? 'aiSummary' : it.danmakuText ? 'danmaku' : 'desc'
     const body = (it.subtitle?.text || it.aiSummary?.summary || it.danmakuText || it.desc || '').replace(/\s+/g, ' ').trim()
     return {
       bvid: it.bvid,

@@ -244,7 +244,9 @@ export async function readItem(cli: BiliClient, v: Candidate | VideoDetail, cfg:
   )
   const reasons = ((v as Candidate).reasons || []) as string[]
   item.why = reasons.length ? reasons.join(' · ') : `按热度与新鲜度选中（播放 ${fmtCount(item.play)} · ${fmtAge(item.pubdate)}）`
-  item.scoreText = `${item.score}（${item.why}）`
+  // 打分只放数字：报告里紧跟着就是「为什么值得」那一行，把理由重复塞进括号里
+  // 会让每条目多出一行几乎一样的字（读者视角才发现的那种噪声）。
+  item.scoreText = String(item.score)
   return item
 }
 

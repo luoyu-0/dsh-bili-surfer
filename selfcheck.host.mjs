@@ -3,12 +3,13 @@
 //   node selfcheck.host.mjs                 # 只读检查（默认）
 //   node selfcheck.host.mjs --login         # 外加真打一次扫码链（start → 逐格比对 → poll → logout）
 //   node selfcheck.host.mjs --run           # 外加拿一轮（会真写报告与台账）
-//   node selfcheck.host.mjs --port 5299
+//   node selfcheck.host.mjs --port 3694
 //
 // 为什么要有这个：设置页脚本 client.js 只认识 /status 里的几个字段，而插件的路由
 // 只有「重启 dsh 后」才会换成新代码（模块缓存）—— 于是最容易出现的失效是
 // 「用户重启前看到的旧契约」和「我改完的源码」对不上，而两边各自都「看不出问题」。
 // 这里把 client.js 真正读的字段从源码里反推出来，再逐个到活的 /status 里对账。
+import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -24,10 +25,30 @@ const argOf = (name, dflt) => {
   return i >= 0 && argv[i + 1] ? argv[i + 1] : dflt
 }
 const PORT_ARG = argOf('--port', process.env.DSH_WEB_PORT || '')
-// 端口会跟着 DSH 版本变（实测 19387 → 5299，而且两个进程可能各占一个），所以没显式给
-// --port 时挨个试：谁答话就用谁。显式给了就只认那一个（别让脚本自己换目标）。
-const CANDIDATES = PORT_ARG ? [Number(PORT_ARG)] : [5299, 19387, 3000, 8080]
-let PORT = Number(PORT_ARG || CANDIDATES[0])
+// 端口会跟着 DSH 版本/每次启动变（实测 19387 → 5299 → 3694，而且可能同时跑着两个进程），
+// 所以没显式给 --port 时自己找：先问系统「DSH 这个进程在听哪几个端口」，再挨个试 /status，
+// 谁答话用谁。显式给了就只认那一个（别让脚本自己换目标）。
+function dshListeningPorts() {
+  try {
+    if (process.platform === 'win32') {
+      const ps = [
+        "$ids = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -like '*DeepSeek*' -or $_.ProcessName -like '*dsh*' } | Select-Object -ExpandProperty Id)",
+        'if ($ids.Count -gt 0) { Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $ids -contains $_.OwningProcess } | Select-Object -ExpandProperty LocalPort -Unique }',
+      ].join('; ')
+      const out = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { encoding: 'utf8', timeout: 5000 })
+      return out.split(/\s+/).map(Number).filter((n) => Number.isInteger(n) && n > 0 && n < 65536)
+    }
+    const out = execFileSync('lsof', ['-nP', '-iTCP', '-sTCP:LISTEN'], { encoding: 'utf8', timeout: 5000 })
+    return [...out.matchAll(/:(\d+)\s+\(LISTEN\)/g)].map((m) => Number(m[1]))
+  } catch {
+    return []
+  }
+}
+
+const CANDIDATES = PORT_ARG
+  ? [Number(PORT_ARG)]
+  : [...new Set([...dshListeningPorts(), 3694, 5299, 19387, 3000, 8080])]
+let PORT = Number(PORT_ARG || CANDIDATES[0] || 3694)
 let BASE = `http://127.0.0.1:${PORT}/api/bili-surfer`
 
 async function resolveBase() {
