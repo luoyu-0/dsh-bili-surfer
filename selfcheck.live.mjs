@@ -64,8 +64,14 @@ ok('popular', pop.length > 0, `${pop.length} 条`)
 const rec = await recommend(cli, { num: 5 })
 ok('recommend', rec.length > 0, `${rec.length} 条`)
 
-const qr = await qrStart(cli)
-ok('qrStart', qr.url.startsWith('https://'), qr.url.slice(0, 60))
+try {
+  const qr = await qrStart(cli)
+  ok('qrStart', qr.url.startsWith('https://'), qr.url.slice(0, 60))
+} catch (e) {
+  // passport 这个域名偶尔连不上（实测有一次 CONNECT_TIMEOUT）：那是网络，不是插件坏了，
+  // 但它不能把整份冒烟报告的结论淹掉 —— 记成一条失败，继续往下走。
+  ok('qrStart', false, `拿不到二维码（网络？）：${e?.message || e}`)
+}
 
 console.log(fail ? `\n${fail} 项失败` : '\n全部通过')
 // ⚠️ 别用 process.exit()：真打过网络之后它可能撞 libuv 断言（AGENTS.md 规矩 22）。
